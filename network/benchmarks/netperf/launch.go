@@ -100,9 +100,14 @@ func main() {
 		JsonOutput:    jsonOutput,
 		KubeConfig:    kubeConfig,
 	}
-	err := lib.PerformTests(testParams)
+	results, err := lib.PerformTests(testParams)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
+	}
+	fmt.Println("Results :")
+	for _, result := range results {
+		fmt.Println("CSV Result File  : ", result.CsvResultFile)
+		fmt.Println("JSON Result File : ", result.JsonResultFile)
 	}
 }
