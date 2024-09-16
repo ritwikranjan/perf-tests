@@ -88,16 +88,6 @@ const (
 	localhostIPv4Address = "127.0.0.1"
 )
 
-const (
-	iperfTCPTest = iota
-	qperfTCPTest
-	iperfUDPTest
-	iperfSctpTest
-	netperfTest
-	iperfThroughputTest
-	iperfThroughputUDPTest
-)
-
 // NetPerfRPC service that exposes RegisterClient and ReceiveOutput for clients
 type NetPerfRPC int
 
