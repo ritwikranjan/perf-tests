@@ -577,6 +577,11 @@ func (t *NetPerfRPC) ReceiveOutput(data *WorkerOutput, _ *int) error {
 		fmt.Println("Jobdone from worker", data.Worker, "JSON output generated")
 	}
 
+	if testcase.JsonParser != nil {
+		registerJsonResult(testcase.Label, testcase.JsonParser(data.Output))
+		fmt.Println("Jobdone from worker", data.Worker, "JSON output generated")
+	}
+
 	return nil
 }
 
