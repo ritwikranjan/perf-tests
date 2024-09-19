@@ -27,16 +27,18 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
-<<<<<<< HEAD
-	"github.com/ritwikranjan/perf-tests/network/benchmarks/netperf/lib"
-=======
 	experiment "github.com/ritwikranjan/perf-tests/network/benchmarks/netperf/pack"
->>>>>>> edc884dd8 (create an experimental package)
 	api "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 const (
@@ -84,8 +86,6 @@ func init() {
 	flag.BoolVar(&jsonOutput, "json", false, "Output JSON data along with CSV data")
 }
 
-<<<<<<< HEAD
-=======
 func setupClient() *kubernetes.Clientset {
 	config, err := clientcmd.BuildConfigFromFlags("", kubeConfig)
 	if err != nil {
@@ -476,7 +476,6 @@ func executeTests(c *kubernetes.Clientset) bool {
 	return false
 }
 
->>>>>>> edc884dd8 (create an experimental package)
 func main() {
 	flag.Parse()
 	fmt.Println("Network Performance Test")
@@ -486,30 +485,29 @@ func main() {
 	fmt.Println("Docker image    : ", netperfImage)
 	fmt.Println("------------------------------------------------------------")
 
-	testParams := lib.TestParams{
-		Iterations:    iterations,
-		Tag:           tag,
-		TestNamespace: testNamespace,
-		Image:         netperfImage,
-		CleanupOnly:   cleanupOnly,
-		TestFrom:      testFrom,
-		TestTo:        testTo,
-		JsonOutput:    jsonOutput,
-		KubeConfig:    kubeConfig,
+	var c *kubernetes.Clientset
+	if c = setupClient(); c == nil {
+		fmt.Println("Failed to setup REST client to Kubernetes cluster")
+		return
 	}
-	results, err := lib.PerformTests(testParams)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+	if cleanupOnly {
+		cleanup(c)
+		return
 	}
-	fmt.Println("Results :")
-	for _, result := range results {
-		fmt.Println("CSV Result File  : ", result.CsvResultFile)
-		fmt.Println("JSON Result File : ", result.JsonResultFile)
+	nodes := getMinionNodes(c)
+	if nodes == nil {
+		return
 	}
+	if len(nodes.Items) < 2 {
+		fmt.Println("Insufficient number of nodes for test (need minimum 2 nodes)")
+		return
+	}
+	primaryNode = nodes.Items[0]
+	secondaryNode = nodes.Items[1]
+	fmt.Printf("Selected primary,secondary nodes = (%s, %s)\n", primaryNode.GetName(), secondaryNode.GetName())
+	executeTests(c)
+	// cleanup(c)
 }
-<<<<<<< HEAD
-=======
 
 // TODO: Add support for these tests to be utilized as a library
 func LaunchNetperfTests(iterations int, kubeConfig string, testNamespace string, netperfImage string, testFrom, testTo int) {
@@ -521,4 +519,3 @@ func LaunchNetperfTests(iterations int, kubeConfig string, testNamespace string,
 	flag.Set("testTo", fmt.Sprintf("%d", testTo))
 	main()
 }
->>>>>>> 7ace513e3 (Export a lib function so that test can be run from another go program)
