@@ -46,7 +46,7 @@ func PerformTests(testParams TestParams) error {
 
 	fmt.Println("Primary Node   : ", primaryNode.Name)
 	fmt.Println("Secondary Node : ", secondaryNode.Name)
-
+  
 	if testParams.CleanupOnly {
 		cleanup(c, testParams.TestNamespace)
 		return nil
