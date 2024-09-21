@@ -172,7 +172,7 @@ func main() {
 
 	}
 	grabEnv()
-	// testcases = testcases[testFrom:testTo]
+	testcases = testcases[testFrom:testTo]
 	fmt.Println("Running as", mode, "...")
 	if mode == orchestratorMode {
 		orchestrate()
