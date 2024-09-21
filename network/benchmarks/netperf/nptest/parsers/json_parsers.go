@@ -53,6 +53,7 @@ func ParseIperfThrouputTCPTest(output string) string {
 	outputResult.MeanRoundTripTime = iperfThroughput.End.Streams[0].Sender.MeanRoundTripTime
 	outputResult.MinRoundTripTime = iperfThroughput.End.Streams[0].Sender.MinRoundTripTime
 	outputResult.MaxRoundTripTime = iperfThroughput.End.Streams[0].Sender.MaxRoundTripTime
+	outputResult.Retransmits = iperfThroughput.End.Streams[0].Sender.Retransmits
 	outputResult.CPUUtilization.Host = iperfThroughput.End.CPUUtilizationPercent.HostTotal
 	outputResult.CPUUtilization.Remote = iperfThroughput.End.CPUUtilizationPercent.RemoteTotal
 

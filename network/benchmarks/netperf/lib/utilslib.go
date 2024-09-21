@@ -225,27 +225,31 @@ func createRCs(c *kubernetes.Clientset, testParams TestParams, primaryNode, seco
 	return nil
 }
 
-func executeTests(c *kubernetes.Clientset, testParams TestParams, primaryNode, secondaryNode api.Node) error {
+func executeTests(c *kubernetes.Clientset, testParams TestParams, primaryNode, secondaryNode api.Node) ([]Result, error) {
+	results := make([]Result, testParams.Iterations)
 	for i := 0; i < testParams.Iterations; i++ {
 		cleanup(c, testParams.TestNamespace)
 		if err := createServices(c, testParams.TestNamespace); err != nil {
-			return fmt.Errorf("failed to create services: %v", err)
+			return nil, fmt.Errorf("failed to create services: %v", err)
 		}
 		time.Sleep(3 * time.Second)
 		if err := createRCs(c, testParams, primaryNode, secondaryNode); err != nil {
-			return fmt.Errorf("failed to create replication controllers: %v", err)
+			return nil, fmt.Errorf("failed to create replication controllers: %v", err)
 		}
 		fmt.Println("Waiting for netperf pods to start up")
 
 		orchestratorPodName := getOrchestratorPodName(c, testParams.TestNamespace)
 		fmt.Println("Orchestrator Pod is", orchestratorPodName)
 
+		var jsonFilePath string
+		var csvFilePath string
+
 		// The pods orchestrate themselves, we just wait for the results file to show up in the orchestrator container
 		for {
 			// Monitor the orchestrator pod for the CSV results file
 			csvdata, err := getDataFromPod(c, orchestratorPodName, csvDataMarker, csvEndDataMarker, testParams.TestNamespace)
 			if err != nil {
-				return fmt.Errorf("error getting CSV data from orchestrator pod: %v", err)
+				return nil, fmt.Errorf("error getting CSV data from orchestrator pod: %v", err)
 			}
 			if csvdata == nil {
 				fmt.Println("Scanned orchestrator pod filesystem - no results file found yet...")
@@ -256,29 +260,30 @@ func executeTests(c *kubernetes.Clientset, testParams TestParams, primaryNode, s
 			if testParams.JsonOutput {
 				jsondata, err := getDataFromPod(c, orchestratorPodName, jsonDataMarker, jsonEndDataMarker, testParams.TestNamespace)
 				if err != nil {
-					return fmt.Errorf("error getting JSON data from orchestrator pod: %v", err)
+					return nil, fmt.Errorf("error getting JSON data from orchestrator pod: %v", err)
 				}
 				if jsondata == nil {
 					fmt.Println("Scanned orchestrator pod filesystem - no json data found yet...")
 					time.Sleep(60 * time.Second)
 					continue
 				}
-				err = processRawData(jsondata, testParams.TestNamespace, testParams.Tag, "json")
+				jsonFilePath, err = processRawData(jsondata, testParams.TestNamespace, testParams.Tag, "json")
 				if err != nil {
-					return fmt.Errorf("error processing JSON data: %v", err)
+					return nil, fmt.Errorf("error processing JSON data: %v", err)
 				}
 			}
 
-			err = processRawData(csvdata, testParams.TestNamespace, testParams.Tag, "csv")
+			csvFilePath, err = processRawData(csvdata, testParams.TestNamespace, testParams.Tag, "csv")
 			if err != nil {
-				return fmt.Errorf("error processing CSV data: %v", err)
+				return nil, fmt.Errorf("error processing CSV data: %v", err)
 			}
 
 			break
 		}
 		fmt.Printf("TEST RUN (Iteration %d) FINISHED - cleaning up services and pods\n", i)
+		results[i] = Result{JsonResultFile: jsonFilePath, CsvResultFile: csvFilePath}
 	}
-	return nil
+	return results, nil
 }
 
 func getOrchestratorPodName(c *kubernetes.Clientset, testNamespace string) string {

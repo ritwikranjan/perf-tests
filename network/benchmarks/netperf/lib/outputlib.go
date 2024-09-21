@@ -34,7 +34,7 @@ func getDataFromPod(c *kubernetes.Clientset, podName, startMarker, endMarker, te
 	return &data, nil
 }
 
-func processRawData(rawData *string, testNamespace, tag, fileExtension string) error {
+func processRawData(rawData *string, testNamespace, tag, fileExtension string) (string, error) {
 	t := time.Now().UTC()
 	outputFileDirectory := fmt.Sprintf("results_%s-%s", testNamespace, tag)
 	outputFilePrefix := fmt.Sprintf("%s-%s_%s.", testNamespace, tag, t.Format("20060102150405"))
@@ -43,17 +43,17 @@ func processRawData(rawData *string, testNamespace, tag, fileExtension string) e
 	if _, err := os.Stat(outputFileDirectory); os.IsNotExist(err) {
 		err := os.Mkdir(outputFileDirectory, 0766)
 		if err != nil {
-			return err
+			return "", err
 		}
 	}
 	fd, err := os.OpenFile(outputFilePath, os.O_RDWR|os.O_CREATE, 0666)
 	if err != nil {
-		return fmt.Errorf("ERROR writing output datafile: %s", err)
+		return "", fmt.Errorf("ERROR writing output datafile: %s", err)
 	}
 	defer fd.Close()
 	_, err = fd.WriteString(*rawData)
 	if err != nil {
-		return fmt.Errorf("error writing string: %s", err)
+		return "", fmt.Errorf("error writing string: %s", err)
 	}
-	return nil
+	return outputFilePath, nil
 }
