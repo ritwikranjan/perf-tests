@@ -26,6 +26,7 @@ package main
 // Imports only base Golang packages
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -34,7 +35,6 @@ import (
 	"net/rpc"
 	"os"
 	"os/exec"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -57,15 +57,23 @@ var testFrom, testTo int
 
 var workerStateMap map[string]*workerState
 
-var iperfTCPOutputRegexp *regexp.Regexp
-var iperfSCTPOutputRegexp *regexp.Regexp
-var iperfUDPOutputRegexp *regexp.Regexp
-var netperfOutputRegexp *regexp.Regexp
-var iperfCPUOutputRegexp *regexp.Regexp
-
 var dataPoints map[string][]point
 var dataPointKeys []string
 var datapointsFlushed bool
+
+type Result struct {
+	Label  string `json:"label"`
+	Result string `json:"result"`
+}
+
+var results []Result = make([]Result, 0)
+
+func addResult(label, resultJson string) {
+	results = append(results, Result{
+		Label:  label,
+		Result: resultJson,
+	})
+}
 
 var globalLock sync.Mutex
 
@@ -77,6 +85,8 @@ const (
 	netperfPath          = "/usr/local/bin/netperf"
 	netperfServerPath    = "/usr/local/bin/netserver"
 	outputCaptureFile    = "/tmp/output.txt"
+	jsonDataMarker       = "GENERATING JSON OUTPUT"
+	jsonEndDataMarker    = "END JSON OUTPUT"
 	mssMin               = 96
 	mssMax               = 1460
 	mssStepSize          = 64
@@ -84,15 +94,8 @@ const (
 	msgSizeMin           = 1
 	parallelStreams      = "8"
 	rpcServicePort       = "5202"
+	iperf3SctpPort       = "5004"
 	localhostIPv4Address = "127.0.0.1"
-)
-
-const (
-	iperfTCPTest = iota
-	qperfTCPTest
-	iperfUDPTest
-	iperfSctpTest
-	netperfTest
 )
 
 // NetPerfRPC service that exposes RegisterClient and ReceiveOutput for clients
@@ -112,7 +115,7 @@ type IperfClientWorkItem struct {
 	Port    string
 	MSS     int
 	MsgSize int
-	Type    int
+	Type    TestType
 }
 
 // IperfServerWorkItem represents a single task for an Iperf server
@@ -142,21 +145,9 @@ type WorkerOutput struct {
 	Output string
 	Code   int
 	Worker string
-	Type   int
+	Type   TestType
 }
 
-type testcase struct {
-	SourceNode      string
-	DestinationNode string
-	Label           string
-	ClusterIP       bool
-	Finished        bool
-	MSS             int
-	MsgSize         int
-	Type            int
-}
-
-var testcases []*testcase
 var currentJobIndex int
 
 func init() {
@@ -167,42 +158,8 @@ func init() {
 	flag.IntVar(&testTo, "testTo", 5, "end at test number testTo")
 
 	workerStateMap = make(map[string]*workerState)
-	testcases = []*testcase{
-		{SourceNode: "netperf-w1", DestinationNode: "netperf-w2", Label: "1 qperf TCP. Same VM using Pod IP", Type: qperfTCPTest, ClusterIP: false, MsgSize: msgSizeMin},
-		{SourceNode: "netperf-w1", DestinationNode: "netperf-w2", Label: "2 qperf TCP. Same VM using Virtual IP", Type: qperfTCPTest, ClusterIP: true, MsgSize: msgSizeMin},
-		{SourceNode: "netperf-w1", DestinationNode: "netperf-w3", Label: "3 qperf TCP. Remote VM using Pod IP", Type: qperfTCPTest, ClusterIP: false, MsgSize: msgSizeMin},
-		{SourceNode: "netperf-w3", DestinationNode: "netperf-w2", Label: "4 qperf TCP. Remote VM using Virtual IP", Type: qperfTCPTest, ClusterIP: true, MsgSize: msgSizeMin},
-		{SourceNode: "netperf-w2", DestinationNode: "netperf-w2", Label: "5 qperf TCP. Hairpin Pod to own Virtual IP", Type: qperfTCPTest, ClusterIP: true, MsgSize: msgSizeMin},
-
-		{SourceNode: "netperf-w1", DestinationNode: "netperf-w2", Label: "1 iperf TCP. Same VM using Pod IP", Type: iperfTCPTest, ClusterIP: false, MSS: mssMin},
-		{SourceNode: "netperf-w1", DestinationNode: "netperf-w2", Label: "2 iperf TCP. Same VM using Virtual IP", Type: iperfTCPTest, ClusterIP: true, MSS: mssMin},
-		{SourceNode: "netperf-w1", DestinationNode: "netperf-w3", Label: "3 iperf TCP. Remote VM using Pod IP", Type: iperfTCPTest, ClusterIP: false, MSS: mssMin},
-		{SourceNode: "netperf-w3", DestinationNode: "netperf-w2", Label: "4 iperf TCP. Remote VM using Virtual IP", Type: iperfTCPTest, ClusterIP: true, MSS: mssMin},
-		{SourceNode: "netperf-w2", DestinationNode: "netperf-w2", Label: "5 iperf TCP. Hairpin Pod to own Virtual IP", Type: iperfTCPTest, ClusterIP: true, MSS: mssMin},
-
-		{SourceNode: "netperf-w1", DestinationNode: "netperf-w2", Label: "6 iperf SCTP. Same VM using Pod IP", Type: iperfSctpTest, ClusterIP: false, MSS: mssMin},
-		{SourceNode: "netperf-w1", DestinationNode: "netperf-w2", Label: "7 iperf SCTP. Same VM using Virtual IP", Type: iperfSctpTest, ClusterIP: true, MSS: mssMin},
-		{SourceNode: "netperf-w1", DestinationNode: "netperf-w3", Label: "8 iperf SCTP. Remote VM using Pod IP", Type: iperfSctpTest, ClusterIP: false, MSS: mssMin},
-		{SourceNode: "netperf-w3", DestinationNode: "netperf-w2", Label: "9 iperf SCTP. Remote VM using Virtual IP", Type: iperfSctpTest, ClusterIP: true, MSS: mssMin},
-		{SourceNode: "netperf-w2", DestinationNode: "netperf-w2", Label: "10 iperf SCTP. Hairpin Pod to own Virtual IP", Type: iperfSctpTest, ClusterIP: true, MSS: mssMin},
-		{SourceNode: "netperf-w1", DestinationNode: "netperf-w2", Label: "11 iperf UDP. Same VM using Pod IP", Type: iperfUDPTest, ClusterIP: false, MSS: mssMax},
-		{SourceNode: "netperf-w1", DestinationNode: "netperf-w2", Label: "12 iperf UDP. Same VM using Virtual IP", Type: iperfUDPTest, ClusterIP: true, MSS: mssMax},
-		{SourceNode: "netperf-w1", DestinationNode: "netperf-w3", Label: "13 iperf UDP. Remote VM using Pod IP", Type: iperfUDPTest, ClusterIP: false, MSS: mssMax},
-		{SourceNode: "netperf-w3", DestinationNode: "netperf-w2", Label: "14 iperf UDP. Remote VM using Virtual IP", Type: iperfUDPTest, ClusterIP: true, MSS: mssMax},
-		{SourceNode: "netperf-w1", DestinationNode: "netperf-w2", Label: "15 netperf. Same VM using Pod IP", Type: netperfTest, ClusterIP: false},
-		{SourceNode: "netperf-w1", DestinationNode: "netperf-w2", Label: "16 netperf. Same VM using Virtual IP", Type: netperfTest, ClusterIP: true},
-		{SourceNode: "netperf-w1", DestinationNode: "netperf-w3", Label: "17 netperf. Remote VM using Pod IP", Type: netperfTest, ClusterIP: false},
-		{SourceNode: "netperf-w3", DestinationNode: "netperf-w2", Label: "18 netperf. Remote VM using Virtual IP", Type: netperfTest, ClusterIP: true},
-	}
 
 	currentJobIndex = 0
-
-	// Regexes to parse the Mbits/sec out of iperf TCP, SCTP, UDP and netperf output
-	iperfTCPOutputRegexp = regexp.MustCompile("SUM.*\\s+(\\d+)\\sMbits/sec\\s+receiver")
-	iperfSCTPOutputRegexp = regexp.MustCompile("SUM.*\\s+(\\d+)\\sMbits/sec\\s+receiver")
-	iperfUDPOutputRegexp = regexp.MustCompile("\\s+(\\S+)\\sMbits/sec\\s+\\S+\\s+ms\\s+")
-	netperfOutputRegexp = regexp.MustCompile("\\s+\\d+\\s+\\d+\\s+\\d+\\s+\\S+\\s+(\\S+)\\s+")
-	iperfCPUOutputRegexp = regexp.MustCompile(`local/sender\s(\d+\.\d+)%\s\((\d+\.\d+)%\w/(\d+\.\d+)%\w\),\sremote/receiver\s(\d+\.\d+)%\s\((\d+\.\d+)%\w/(\d+\.\d+)%\w\)`)
 
 	dataPoints = make(map[string][]point)
 }
@@ -225,7 +182,7 @@ func main() {
 
 	}
 	grabEnv()
-	testcases = testcases[testFrom:testTo]
+	// testcases = testcases[testFrom:testTo]
 	fmt.Println("Running as", mode, "...")
 	if mode == orchestratorMode {
 		orchestrate()
@@ -317,6 +274,10 @@ func allocateWorkToClient(workerState *workerState, workItem *WorkItem) {
 				v.Finished = true
 			}
 			return
+		case v.Type == iperfThroughputTest || v.Type == iperfThroughputUDPTest:
+			workItem.ClientItem.Port = "5201"
+			v.Finished = true
+			return
 		case v.Type == qperfTCPTest:
 			workItem.ClientItem.MsgSize = v.MsgSize
 			v.MsgSize <<= 1
@@ -326,6 +287,7 @@ func allocateWorkToClient(workerState *workerState, workItem *WorkItem) {
 			return
 		case v.Type == netperfTest:
 			workItem.ClientItem.Port = "12865"
+			v.Finished = true
 			return
 		}
 	}
@@ -339,6 +301,7 @@ func allocateWorkToClient(workerState *workerState, workItem *WorkItem) {
 	if !datapointsFlushed {
 		fmt.Println("ALL TESTCASES AND MSS RANGES COMPLETE - GENERATING CSV OUTPUT")
 		flushDataPointsToCsv()
+		flushResultJsonData()
 		datapointsFlushed = true
 	}
 
@@ -427,16 +390,146 @@ func flushDataPointsToCsv() {
 	fmt.Println("END CSV DATA")
 }
 
-func parseIperfTCPBandwidth(output string) string {
-	// Parses the output of iperf3 and grabs the group Mbits/sec from the output
-	match := iperfTCPOutputRegexp.FindStringSubmatch(output)
-	if match != nil && len(match) > 1 {
-		return match[1]
+func flushResultJsonData() {
+	jsonData, err := json.MarshalIndent(results, "", "  ")
+	if err != nil {
+		fmt.Println("Error generating JSON:", err)
+		return
 	}
-	return "0"
+
+	fmt.Println(jsonDataMarker)
+	fmt.Println(string(jsonData))
+	fmt.Println(jsonEndDataMarker)
+}
+
+func parseIperfThrouputTCPTest(output string) string {
+	var iperfThroughput struct {
+		End struct {
+			Streams []struct {
+				Sender struct {
+					BitsPerSecond     float64 `json:"bits_per_second"`
+					MeanRoundTripTime int     `json:"mean_rtt"`
+					MinRoundTripTime  int     `json:"min_rtt"`
+					MaxRoundTripTime  int     `json:"max_rtt"`
+					Retransmits       int     `json:"retransmits"`
+				} `json:"sender"`
+			} `json:"streams"`
+			CPUUtilizationPercent struct {
+				HostTotal   float64 `json:"host_total"`
+				RemoteTotal float64 `json:"remote_total"`
+			} `json:"cpu_utilization_percent"`
+		} `json:"end"`
+	}
+
+	fmt.Println("Parsing iperf output\n", output)
+	fmt.Println("End of iperf output")
+
+	err := json.Unmarshal([]byte(output), &iperfThroughput)
+	if err != nil {
+		return "{\"error\": \"Failed to parse JSON output\", \"message\": \"" + err.Error() + "\"}"
+	}
+
+	if len(iperfThroughput.End.Streams) != 1 {
+		return "{\"error\": \"Failed to parse JSON output\", \"message\": \"Expected 1 stream, got " + strconv.Itoa(len(iperfThroughput.End.Streams)) + "\"}"
+	}
+
+	var outputResult struct {
+		TotalThroughput   float64 `json:"total_throughput"`
+		MeanRoundTripTime int     `json:"mean_rtt"`
+		MinRoundTripTime  int     `json:"min_rtt"`
+		MaxRoundTripTime  int     `json:"max_rtt"`
+		Retransmits       int     `json:"retransmits"`
+		CPUUtilization    struct {
+			Host   float64 `json:"host"`
+			Remote float64 `json:"remote"`
+		} `json:"cpu_utilization"`
+	}
+
+	outputResult.TotalThroughput = iperfThroughput.End.Streams[0].Sender.BitsPerSecond / 1e6
+	outputResult.MeanRoundTripTime = iperfThroughput.End.Streams[0].Sender.MeanRoundTripTime
+	outputResult.MinRoundTripTime = iperfThroughput.End.Streams[0].Sender.MinRoundTripTime
+	outputResult.MaxRoundTripTime = iperfThroughput.End.Streams[0].Sender.MaxRoundTripTime
+	outputResult.CPUUtilization.Host = iperfThroughput.End.CPUUtilizationPercent.HostTotal
+	outputResult.CPUUtilization.Remote = iperfThroughput.End.CPUUtilizationPercent.RemoteTotal
+
+	parsedJson, err := json.Marshal(outputResult)
+	if err != nil {
+		return "{\"error\": \"Failed to marshal JSON output\", \"message\": \"" + err.Error() + "\"}"
+	}
+
+	return string(parsedJson)
+}
+
+func parseIperfThrouputUDPTest(output string) string {
+	fmt.Println("Parsing iperf output\n", output)
+	var iperfThroughput struct {
+		End struct {
+			Sum struct {
+				BitsPerSecond float64 `json:"bits_per_second"`
+				Jitter        float64 `json:"jitter_ms"`
+				LostPackets   int     `json:"lost_packets"`
+				TotalPackets  int     `json:"packets"`
+				LostPercent   float64 `json:"lost_percent"`
+			} `json:"sum"`
+			CPUUtilizationPercent struct {
+				HostTotal   float64 `json:"host_total"`
+				RemoteTotal float64 `json:"remote_total"`
+			} `json:"cpu_utilization_percent"`
+		} `json:"end"`
+	}
+
+	err := json.Unmarshal([]byte(output), &iperfThroughput)
+	if err != nil {
+		return "{\"error\": \"Failed to parse JSON output\", \"message\": \"" + err.Error() + "\"}"
+	}
+
+	var outputResult struct {
+		TotalThroughput float64 `json:"total_throughput"`
+		Jitter          float64 `json:"jitter_ms"`
+		LostPackets     int     `json:"lost_packets"`
+		TotalPackets    int     `json:"total_packets"`
+		LostPercent     float64 `json:"lost_percent"`
+		CPUUtilization  struct {
+			Host   float64 `json:"host"`
+			Remote float64 `json:"remote"`
+		} `json:"cpu_utilization"`
+	}
+
+	outputResult.TotalThroughput = iperfThroughput.End.Sum.BitsPerSecond / 1e6
+	outputResult.Jitter = iperfThroughput.End.Sum.Jitter
+	outputResult.LostPackets = iperfThroughput.End.Sum.LostPackets
+	outputResult.TotalPackets = iperfThroughput.End.Sum.TotalPackets
+	outputResult.LostPercent = iperfThroughput.End.Sum.LostPercent
+	outputResult.CPUUtilization.Host = iperfThroughput.End.CPUUtilizationPercent.HostTotal
+	outputResult.CPUUtilization.Remote = iperfThroughput.End.CPUUtilizationPercent.RemoteTotal
+
+	parsedJson, err := json.Marshal(outputResult)
+	if err != nil {
+		return "{\"error\": \"Failed to marshal JSON output\", \"message\": \"" + err.Error() + "\"}"
+	}
+
+	return string(parsedJson)
+}
+
+func flushResultJsonData() {
+	var buffer string
+	buffer = "GENRATING JSON OUTPUT\n"
+	buffer += "["
+	for _, label := range resultKeys {
+		buffer += "{\n"
+		buffer += fmt.Sprintf("  \"label\": \"%s\",\n", label)
+		buffer += fmt.Sprintf("  \"result\": %s\n", results[label])
+		buffer += "},\n"
+	}
+	// Remove the trailing comma
+	buffer = buffer[:len(buffer)-2]
+	buffer = buffer + "]\n"
+	buffer = buffer + "END JSON OUTPUT"
+	fmt.Println(buffer)
 }
 
 func parseQperfTCPLatency(output string) string {
+	fmt.Println("Parsing qperf output\n", output)
 	squeeze := func(s string) string {
 		return strings.Join(strings.Fields(s), " ")
 	}
@@ -455,42 +548,6 @@ func parseQperfTCPLatency(output string) string {
 	return fmt.Sprintf("(%s; %s)", bw, lat)
 }
 
-func parseIperfSctpBandwidth(output string) string {
-	// Parses the output of iperf3 and grabs the group Mbits/sec from the output
-	match := iperfSCTPOutputRegexp.FindStringSubmatch(output)
-	if match != nil && len(match) > 1 {
-		return match[1]
-	}
-	return "0"
-}
-
-func parseIperfUDPBandwidth(output string) string {
-	// Parses the output of iperf3 (UDP mode) and grabs the Mbits/sec from the output
-	match := iperfUDPOutputRegexp.FindStringSubmatch(output)
-	if match != nil && len(match) > 1 {
-		return match[1]
-	}
-	return "0"
-}
-
-func parseIperfCPUUsage(output string) (string, string) {
-	// Parses the output of iperf and grabs the CPU usage on sender and receiver side from the output
-	match := iperfCPUOutputRegexp.FindStringSubmatch(output)
-	if match != nil && len(match) > 1 {
-		return match[1], match[4]
-	}
-	return "0", "0"
-}
-
-func parseNetperfBandwidth(output string) string {
-	// Parses the output of netperf and grabs the Bbits/sec from the output
-	match := netperfOutputRegexp.FindStringSubmatch(output)
-	if match != nil && len(match) > 1 {
-		return match[1]
-	}
-	return "0"
-}
-
 // ReceiveOutput processes a data received from a single client
 func (t *NetPerfRPC) ReceiveOutput(data *WorkerOutput, _ *int) error {
 	globalLock.Lock()
@@ -498,64 +555,28 @@ func (t *NetPerfRPC) ReceiveOutput(data *WorkerOutput, _ *int) error {
 
 	testcase := testcases[currentJobIndex]
 
-	var outputLog string
-	var bw string
-	var cpuSender string
-	var cpuReceiver string
+	outputLog := fmt.Sprintln("Received output from worker", data.Worker, "for test", testcase.Label,
+		"from", testcase.SourceNode, "to", testcase.DestinationNode) + data.Output
+	writeOutputFile(outputCaptureFile, outputLog)
+	fmt.Println("Output: \n", data.Output)
 
-	switch data.Type {
-	case iperfTCPTest:
-		mss := testcases[currentJobIndex].MSS - mssStepSize
-		outputLog = outputLog + fmt.Sprintln("Received TCP output from worker", data.Worker, "for test", testcase.Label,
-			"from", testcase.SourceNode, "to", testcase.DestinationNode, "MSS:", mss) + data.Output
-		writeOutputFile(outputCaptureFile, outputLog)
-		bw = parseIperfTCPBandwidth(data.Output)
-		cpuSender, cpuReceiver = parseIperfCPUUsage(data.Output)
-		registerDataPoint(testcase.Label, mss, bw, currentJobIndex)
-
-	case qperfTCPTest:
-		msgSize := testcases[currentJobIndex].MsgSize / 2
-		outputLog = outputLog + fmt.Sprintln("Received TCP output from worker", data.Worker, "for test", testcase.Label,
-			"from", testcase.SourceNode, "to", testcase.DestinationNode, "MsgSize:", msgSize) + data.Output
-		writeOutputFile(outputCaptureFile, outputLog)
-		bw = parseQperfTCPLatency(data.Output)
-		cpuSender, cpuReceiver = "na", "na"
-		registerDataPoint(testcase.Label, msgSize, bw, currentJobIndex)
-
-	case iperfSctpTest:
-		mss := testcases[currentJobIndex].MSS - mssStepSize
-		outputLog = outputLog + fmt.Sprintln("Received SCTP output from worker", data.Worker, "for test", testcase.Label,
-			"from", testcase.SourceNode, "to", testcase.DestinationNode, "MSS:", mss) + data.Output
-		writeOutputFile(outputCaptureFile, outputLog)
-		bw = parseIperfSctpBandwidth(data.Output)
-		cpuSender, cpuReceiver = parseIperfCPUUsage(data.Output)
-		registerDataPoint(testcase.Label, mss, bw, currentJobIndex)
-
-	case iperfUDPTest:
-		mss := testcases[currentJobIndex].MSS - mssStepSize
-		outputLog = outputLog + fmt.Sprintln("Received UDP output from worker", data.Worker, "for test", testcase.Label,
-			"from", testcase.SourceNode, "to", testcase.DestinationNode, "MSS:", mss) + data.Output
-		writeOutputFile(outputCaptureFile, outputLog)
-		bw = parseIperfUDPBandwidth(data.Output)
-		registerDataPoint(testcase.Label, mss, bw, currentJobIndex)
-
-	case netperfTest:
-		outputLog = outputLog + fmt.Sprintln("Received netperf output from worker", data.Worker, "for test", testcase.Label,
-			"from", testcase.SourceNode, "to", testcase.DestinationNode) + data.Output
-		writeOutputFile(outputCaptureFile, outputLog)
-		bw = parseNetperfBandwidth(data.Output)
-		registerDataPoint(testcase.Label, 0, bw, currentJobIndex)
-		testcases[currentJobIndex].Finished = true
-
+	if testcase.BandwidthParser != nil {
+		bw, mss := testcase.BandwidthParser(data.Output)
+		registerDataPoint(testcase.Label, mss, fmt.Sprintf("%f", bw), currentJobIndex)
+		fmt.Println("Jobdone from worker", data.Worker, "Bandwidth was", bw, "Mbits/sec")
 	}
 
-	switch data.Type {
-	case iperfTCPTest, iperfSctpTest:
-		fmt.Println("Jobdone from worker", data.Worker, "Bandwidth was", bw, "Mbits/sec. CPU usage sender was", cpuSender, "%. CPU usage receiver was", cpuReceiver, "%.")
-	case qperfTCPTest:
-		fmt.Println("Jobdone from worker QPERF", data.Worker, "Bandwidth, Latency was", bw, "CPU usage sender was", cpuSender, "%. CPU usage receiver was", cpuReceiver, "%.")
-	default:
-		fmt.Println("Jobdone from worker", data.Worker, "Bandwidth was", bw, "Mbits/sec")
+	if testcase.JsonParser != nil {
+		addResult(
+			fmt.Sprintf("%s with MSS: %d", testcase.Label, max(testcase.MSS-mssStepSize, 0)),
+			testcase.JsonParser(data.Output),
+		)
+		fmt.Println("Jobdone from worker", data.Worker, "JSON output generated")
+	}
+
+	if testcase.JsonParser != nil {
+		registerJsonResult(testcase.Label, testcase.JsonParser(data.Output))
+		fmt.Println("Jobdone from worker", data.Worker, "JSON output generated")
 	}
 
 	return nil
@@ -612,8 +633,9 @@ func getMyIP() string {
 func handleClientWorkItem(client *rpc.Client, workItem *WorkItem) {
 	fmt.Println("Orchestrator requests worker run item Type:", workItem.ClientItem.Type)
 	switch {
-	case workItem.ClientItem.Type == iperfTCPTest || workItem.ClientItem.Type == iperfUDPTest || workItem.ClientItem.Type == iperfSctpTest:
+	case workItem.ClientItem.Type == iperfTCPTest || workItem.ClientItem.Type == iperfUDPTest || workItem.ClientItem.Type == iperfSctpTest || workItem.ClientItem.Type == iperfThroughputTest || workItem.ClientItem.Type == iperfThroughputUDPTest:
 		outputString := iperfClient(workItem.ClientItem.Host, workItem.ClientItem.MSS, workItem.ClientItem.Type)
+		fmt.Println("iperfClient returned\n", outputString)
 		var reply int
 		err := client.Call("NetPerfRPC.ReceiveOutput", WorkerOutput{Output: outputString, Worker: worker, Type: workItem.ClientItem.Type}, &reply)
 		if err != nil {
@@ -646,7 +668,7 @@ func isIPv6(address string) bool {
 
 // startWork : Entry point to the worker infinite loop
 func startWork() {
-	for true {
+	for {
 		var timeout time.Duration
 		var client *rpc.Client
 		var err error
@@ -657,7 +679,7 @@ func startWork() {
 		}
 
 		timeout = 5
-		for true {
+		for {
 			fmt.Println("Attempting to connect to orchestrator at", host)
 			client, err = rpc.DialHTTP("tcp", address+":"+port)
 			if err == nil {
@@ -667,7 +689,7 @@ func startWork() {
 			time.Sleep(timeout * time.Second)
 		}
 
-		for true {
+		for {
 			clientData := ClientRegistrationData{Host: podname, KubeNode: kubenode, Worker: worker, IP: getMyIP()}
 			var workItem WorkItem
 
@@ -678,18 +700,18 @@ func startWork() {
 			}
 
 			switch {
-			case workItem.IsIdle == true:
+			case workItem.IsIdle:
 				time.Sleep(5 * time.Second)
 				continue
 
-			case workItem.IsServerItem == true:
+			case workItem.IsServerItem:
 				fmt.Println("Orchestrator requests worker run iperf and netperf servers")
 				go iperfServer()
 				go qperfServer()
 				go netperfServer()
 				time.Sleep(1 * time.Second)
 
-			case workItem.IsClientItem == true:
+			case workItem.IsClientItem:
 				handleClientWorkItem(client, &workItem)
 			}
 		}
@@ -698,10 +720,8 @@ func startWork() {
 
 // Invoke and indefinitely run an iperf server
 func iperfServer() {
-	output, success := cmdExec(iperf3Path, []string{iperf3Path, "-s", host, "-J", "-i", "60"}, 15)
-	if success {
-		fmt.Println(output)
-	}
+	output, _ := cmdExec(iperf3Path, []string{iperf3Path, "-s", host, "-J", "-i", "60", "-D"}, 15)
+	fmt.Println(output)
 }
 
 // Invoke and indefinitely run an qperf server
@@ -721,31 +741,24 @@ func netperfServer() {
 }
 
 // Invoke and run an iperf client and return the output if successful.
-func iperfClient(serverHost string, mss int, workItemType int) (rv string) {
+func iperfClient(serverHost string, mss int, workItemType TestType) (rv string) {
 	switch {
+	case workItemType == iperfThroughputTest:
+		rv, _ = cmdExec(iperf3Path, []string{iperf3Path, "-c", serverHost, "-V", "-J", "--time", "180", "--bandwidth", "1000M", "-P", "1", "-w", "410K"}, 15)
+	case workItemType == iperfThroughputUDPTest:
+		rv, _ = cmdExec(iperf3Path, []string{iperf3Path, "-c", serverHost, "-V", "-J", "--time", "180", "--bandwidth", "1000M", "-P", "1", "-w", "410K", "-u"}, 15)
 	case workItemType == iperfTCPTest:
-		output, success := cmdExec(iperf3Path, []string{iperf3Path, "-c", serverHost, "-V", "-N", "-i", "30", "-t", "10", "-f", "m", "-w", "512M", "-Z", "-P", parallelStreams, "-M", strconv.Itoa(mss)}, 15)
-		if success {
-			rv = output
-		}
-
+		rv, _ = cmdExec(iperf3Path, []string{iperf3Path, "-c", serverHost, "-V", "-N", "-i", "30", "-t", "10", "-f", "m", "-w", "512M", "-Z", "-J", "-P", parallelStreams, "-M", strconv.Itoa(mss)}, 15)
 	case workItemType == iperfSctpTest:
-		output, success := cmdExec(iperf3Path, []string{iperf3Path, "-c", serverHost, "-V", "-N", "-i", "30", "-t", "10", "-f", "m", "-w", "512M", "-Z", "-P", parallelStreams, "-M", strconv.Itoa(mss), "--sctp"}, 15)
-		if success {
-			rv = output
-		}
-
+		rv, _ = cmdExec(iperf3Path, []string{iperf3Path, "-c", serverHost, "-V", "-N", "-i", "30", "-t", "10", "-f", "m", "-w", "512M", "-Z", "-P", parallelStreams, "-M", strconv.Itoa(mss), "--sctp"}, 15)
 	case workItemType == iperfUDPTest:
-		output, success := cmdExec(iperf3Path, []string{iperf3Path, "-c", serverHost, "-i", "30", "-t", "10", "-f", "m", "-b", "0", "-u"}, 15)
-		if success {
-			rv = output
-		}
+		rv, _ = cmdExec(iperf3Path, []string{iperf3Path, "-c", serverHost, "-i", "30", "-t", "10", "-f", "m", "-b", "0", "-u", "-J"}, 15)
 	}
 	return
 }
 
 // Invoke and run an qperf client and return the output if successful.
-func qperfClient(serverHost string, workItemType, msgSize int) (rv string) {
+func qperfClient(serverHost string, workItemType TestType, msgSize int) (rv string) {
 
 	str := fmt.Sprint
 
