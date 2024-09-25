@@ -1,45 +1,43 @@
 package parsers
 
 import (
+	"encoding/json"
 	"regexp"
+	"strconv"
 )
 
-func ParseIperfTCPBandwidth(output string) string {
-	// Parses the output of iperf3 and grabs the group Mbits/sec from the output
-	iperfTCPOutputRegexp := regexp.MustCompile("SUM.*\\s+(\\d+)\\sMbits/sec\\s+receiver")
-	match := iperfTCPOutputRegexp.FindStringSubmatch(output)
-	if len(match) > 1 {
-		return match[1]
+func ParseIperfTCPBandwidth(output string) (bw float64, mss int) {
+	var iperfTcpoutput IperfTcpCommandOutput
+
+	err := json.Unmarshal([]byte(output), &iperfTcpoutput)
+	if err != nil {
+		return 0, 0
 	}
-	return "0"
+
+	bw = iperfTcpoutput.End.SumSent.BitsPerSecond / 1e6
+	mss = iperfTcpoutput.Start.TcpMss
+
+	return bw, mss
 }
 
-func ParseIperfSctpBandwidth(output string) string {
-	// Parses the output of iperf3 and grabs the group Mbits/sec from the output
-	iperfSCTPOutputRegexp := regexp.MustCompile("SUM.*\\s+(\\d+)\\sMbits/sec\\s+receiver")
-	match := iperfSCTPOutputRegexp.FindStringSubmatch(output)
-	if len(match) > 1 {
-		return match[1]
+func ParseIperfUDPBandwidth(output string) (bw float64, mss int) {
+	var iperfUdpOutput IperfUdpCommandOutput
+
+	err := json.Unmarshal([]byte(output), &iperfUdpOutput)
+	if err != nil {
+		return 0, 0
 	}
-	return "0"
+
+	return iperfUdpOutput.End.Sum.BitsPerSecond / 1e6, 0
 }
 
-func ParseIperfUDPBandwidth(output string) string {
-	// Parses the output of iperf3 (UDP mode) and grabs the Mbits/sec from the output
-	iperfUDPOutputRegexp := regexp.MustCompile("\\s+(\\S+)\\sMbits/sec\\s+\\S+\\s+ms\\s+")
-	match := iperfUDPOutputRegexp.FindStringSubmatch(output)
-	if len(match) > 1 {
-		return match[1]
-	}
-	return "0"
-}
-
-func ParseNetperfBandwidth(output string) string {
+func ParseNetperfBandwidth(output string) (bw float64, mss int) {
 	// Parses the output of netperf and grabs the Bbits/sec from the output
 	netperfOutputRegexp := regexp.MustCompile("\\s+\\d+\\s+\\d+\\s+\\d+\\s+\\S+\\s+(\\S+)\\s+")
 	match := netperfOutputRegexp.FindStringSubmatch(output)
 	if len(match) > 1 {
-		return match[1]
+		floatVal, _ := strconv.ParseFloat(match[1], 64)
+		return floatVal, 0
 	}
-	return "0"
+	return 0, 0
 }

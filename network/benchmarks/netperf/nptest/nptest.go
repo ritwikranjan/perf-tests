@@ -61,9 +61,19 @@ var dataPoints map[string][]point
 var dataPointKeys []string
 var datapointsFlushed bool
 
-var results map[string]string
-var resultKeys []string
-var resultFlushed bool
+type Result struct {
+	Label  string `json:"label"`
+	Result string `json:"result"`
+}
+
+var results []Result = make([]Result, 0)
+
+func addResult(label, resultJson string) {
+	results = append(results, Result{
+		Label:  label,
+		Result: resultJson,
+	})
+}
 
 var globalLock sync.Mutex
 
@@ -75,7 +85,7 @@ const (
 	netperfPath          = "/usr/local/bin/netperf"
 	netperfServerPath    = "/usr/local/bin/netserver"
 	outputCaptureFile    = "/tmp/output.txt"
-	jsonDataMarker       = "GENRATING JSON OUTPUT"
+	jsonDataMarker       = "GENERATING JSON OUTPUT"
 	jsonEndDataMarker    = "END JSON OUTPUT"
 	mssMin               = 96
 	mssMax               = 1460
@@ -152,7 +162,6 @@ func init() {
 	currentJobIndex = 0
 
 	dataPoints = make(map[string][]point)
-	results = make(map[string]string)
 }
 
 func initializeOutputFiles() {
@@ -292,12 +301,8 @@ func allocateWorkToClient(workerState *workerState, workItem *WorkItem) {
 	if !datapointsFlushed {
 		fmt.Println("ALL TESTCASES AND MSS RANGES COMPLETE - GENERATING CSV OUTPUT")
 		flushDataPointsToCsv()
-		datapointsFlushed = true
-	}
-
-	if !resultFlushed {
 		flushResultJsonData()
-		resultFlushed = true
+		datapointsFlushed = true
 	}
 
 	workItem.IsIdle = true
@@ -350,11 +355,6 @@ func registerDataPoint(label string, mss int, value string, index int) {
 	}
 }
 
-func registerJsonResult(label, resultJson string) {
-	results[label] = resultJson
-	resultKeys = append(resultKeys, label)
-}
-
 func flushDataPointsToCsv() {
 	var buffer string
 
@@ -391,20 +391,15 @@ func flushDataPointsToCsv() {
 }
 
 func flushResultJsonData() {
-	var buffer string
-	buffer = "GENRATING JSON OUTPUT\n"
-	buffer += "["
-	for _, label := range resultKeys {
-		buffer += "{\n"
-		buffer += fmt.Sprintf("  \"label\": \"%s\",\n", label)
-		buffer += fmt.Sprintf("  \"result\": %s\n", results[label])
-		buffer += "},\n"
+	jsonData, err := json.MarshalIndent(results, "", "  ")
+	if err != nil {
+		fmt.Println("Error generating JSON:", err)
+		return
 	}
-	// Remove the trailing comma
-	buffer = buffer[:len(buffer)-2]
-	buffer = buffer + "]\n"
-	buffer = buffer + "END JSON OUTPUT"
-	fmt.Println(buffer)
+
+	fmt.Println(jsonDataMarker)
+	fmt.Println(string(jsonData))
+	fmt.Println(jsonEndDataMarker)
 }
 
 func parseIperfThrouputTCPTest(output string) string {
@@ -566,14 +561,16 @@ func (t *NetPerfRPC) ReceiveOutput(data *WorkerOutput, _ *int) error {
 	fmt.Println("Output: \n", data.Output)
 
 	if testcase.BandwidthParser != nil {
-		mss := testcase.MSS - mssStepSize
-		bw := testcase.BandwidthParser(data.Output)
-		registerDataPoint(testcase.Label, mss, bw, currentJobIndex)
+		bw, mss := testcase.BandwidthParser(data.Output)
+		registerDataPoint(testcase.Label, mss, fmt.Sprintf("%f", bw), currentJobIndex)
 		fmt.Println("Jobdone from worker", data.Worker, "Bandwidth was", bw, "Mbits/sec")
 	}
 
 	if testcase.JsonParser != nil {
-		registerJsonResult(testcase.Label, testcase.JsonParser(data.Output))
+		addResult(
+			fmt.Sprintf("%s with MSS: %d", testcase.Label, max(testcase.MSS-mssStepSize, 0)),
+			testcase.JsonParser(data.Output),
+		)
 		fmt.Println("Jobdone from worker", data.Worker, "JSON output generated")
 	}
 
@@ -751,11 +748,11 @@ func iperfClient(serverHost string, mss int, workItemType TestType) (rv string) 
 	case workItemType == iperfThroughputUDPTest:
 		rv, _ = cmdExec(iperf3Path, []string{iperf3Path, "-c", serverHost, "-V", "-J", "--time", "180", "--bandwidth", "1000M", "-P", "1", "-w", "410K", "-u"}, 15)
 	case workItemType == iperfTCPTest:
-		rv, _ = cmdExec(iperf3Path, []string{iperf3Path, "-c", serverHost, "-V", "-N", "-i", "30", "-t", "10", "-f", "m", "-w", "512M", "-Z", "-P", parallelStreams, "-M", strconv.Itoa(mss)}, 15)
+		rv, _ = cmdExec(iperf3Path, []string{iperf3Path, "-c", serverHost, "-V", "-N", "-i", "30", "-t", "10", "-f", "m", "-w", "512M", "-Z", "-J", "-P", parallelStreams, "-M", strconv.Itoa(mss)}, 15)
 	case workItemType == iperfSctpTest:
 		rv, _ = cmdExec(iperf3Path, []string{iperf3Path, "-c", serverHost, "-V", "-N", "-i", "30", "-t", "10", "-f", "m", "-w", "512M", "-Z", "-P", parallelStreams, "-M", strconv.Itoa(mss), "--sctp"}, 15)
 	case workItemType == iperfUDPTest:
-		rv, _ = cmdExec(iperf3Path, []string{iperf3Path, "-c", serverHost, "-i", "30", "-t", "10", "-f", "m", "-b", "0", "-u"}, 15)
+		rv, _ = cmdExec(iperf3Path, []string{iperf3Path, "-c", serverHost, "-i", "30", "-t", "10", "-f", "m", "-b", "0", "-u", "-J"}, 15)
 	}
 	return
 }

@@ -32,12 +32,13 @@ import (
 	"os"
 
 	api "k8s.io/api/core/v1"
+	"k8s.io/perf-tests/network/benchmarks/netperf/lib"
 )
 
 const (
 	csvDataMarker     = "GENERATING CSV OUTPUT"
 	csvEndDataMarker  = "END CSV DATA"
-	jsonDataMarker    = "GENRATING JSON OUTPUT"
+	jsonDataMarker    = "GENERATING JSON OUTPUT"
 	jsonEndDataMarker = "END JSON OUTPUT"
 	runUUID           = "latest"
 	orchestratorPort  = 5202
@@ -99,9 +100,14 @@ func main() {
 		JsonOutput:    jsonOutput,
 		KubeConfig:    kubeConfig,
 	}
-	err := lib.PerformTests(testParams)
+	results, err := lib.PerformTests(testParams)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
+	}
+	fmt.Println("Results :")
+	for _, result := range results {
+		fmt.Println("CSV Result File  : ", result.CsvResultFile)
+		fmt.Println("JSON Result File : ", result.JsonResultFile)
 	}
 }

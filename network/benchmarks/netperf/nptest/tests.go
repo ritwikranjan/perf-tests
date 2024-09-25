@@ -20,7 +20,7 @@ type testcase struct {
 	TestParams
 	Label           string
 	Finished        bool
-	BandwidthParser func(string) string
+	BandwidthParser func(string) (float64, int)
 	JsonParser      func(string) string
 	// Deprecated: We will use declarative approach to define test cases
 	Type TestType
@@ -99,6 +99,7 @@ var testcases = []*testcase{
 			ClusterIP:       false,
 			MSS:             mssMin,
 		},
+		JsonParser:      parsers.ParseIperfTcpResults,
 		BandwidthParser: parsers.ParseIperfTCPBandwidth,
 		Type:            iperfTCPTest,
 	},
@@ -110,6 +111,7 @@ var testcases = []*testcase{
 			ClusterIP:       true,
 			MSS:             mssMin,
 		},
+		JsonParser:      parsers.ParseIperfTcpResults,
 		BandwidthParser: parsers.ParseIperfTCPBandwidth,
 		Type:            iperfTCPTest,
 	},
@@ -121,6 +123,7 @@ var testcases = []*testcase{
 			ClusterIP:       false,
 			MSS:             mssMin,
 		},
+		JsonParser:      parsers.ParseIperfTcpResults,
 		BandwidthParser: parsers.ParseIperfTCPBandwidth,
 		Type:            iperfTCPTest,
 	},
@@ -132,6 +135,7 @@ var testcases = []*testcase{
 			ClusterIP:       true,
 			MSS:             mssMin,
 		},
+		JsonParser:      parsers.ParseIperfTcpResults,
 		BandwidthParser: parsers.ParseIperfTCPBandwidth,
 		Type:            iperfTCPTest,
 	},
@@ -143,6 +147,7 @@ var testcases = []*testcase{
 			ClusterIP:       true,
 			MSS:             mssMin,
 		},
+		JsonParser:      parsers.ParseIperfTcpResults,
 		BandwidthParser: parsers.ParseIperfTCPBandwidth,
 		Type:            iperfTCPTest,
 	},
@@ -211,6 +216,7 @@ var testcases = []*testcase{
 			ClusterIP:       true,
 			MSS:             mssMax,
 		},
+		JsonParser:      parsers.ParseIperfUdpResults,
 		BandwidthParser: parsers.ParseIperfUDPBandwidth,
 		Type:            iperfUDPTest,
 	},
@@ -222,6 +228,7 @@ var testcases = []*testcase{
 			ClusterIP:       false,
 			MSS:             mssMax,
 		},
+		JsonParser:      parsers.ParseIperfUdpResults,
 		BandwidthParser: parsers.ParseIperfUDPBandwidth,
 		Type:            iperfUDPTest,
 	},
@@ -234,6 +241,7 @@ var testcases = []*testcase{
 			MSS:             mssMax,
 		},
 		BandwidthParser: parsers.ParseIperfUDPBandwidth,
+		JsonParser:      parsers.ParseIperfUdpResults,
 		Type:            iperfUDPTest,
 	},
 	{
@@ -296,7 +304,7 @@ var testcases = []*testcase{
 			DestinationNode: "netperf-w2",
 			ClusterIP:       false,
 		},
-		JsonParser: parsers.ParseIperfThrouputTCPTest,
+		JsonParser: parsers.ParseIperfTcpResults,
 		Type:       iperfThroughputTest,
 	},
 	{
@@ -306,7 +314,7 @@ var testcases = []*testcase{
 			DestinationNode: "netperf-w3",
 			ClusterIP:       false,
 		},
-		JsonParser: parsers.ParseIperfThrouputTCPTest,
+		JsonParser: parsers.ParseIperfTcpResults,
 		Type:       iperfThroughputTest,
 	},
 	{
@@ -316,7 +324,7 @@ var testcases = []*testcase{
 			DestinationNode: "netperf-w3",
 			ClusterIP:       false,
 		},
-		JsonParser: parsers.ParseIperfThrouputUDPTest,
+		JsonParser: parsers.ParseIperfTcpResults,
 		Type:       iperfThroughputUDPTest,
 	},
 	{
@@ -326,7 +334,7 @@ var testcases = []*testcase{
 			DestinationNode: "netperf-w2",
 			ClusterIP:       false,
 		},
-		JsonParser: parsers.ParseIperfThrouputUDPTest,
+		JsonParser: parsers.ParseIperfTcpResults,
 		Type:       iperfThroughputUDPTest,
 	},
 }

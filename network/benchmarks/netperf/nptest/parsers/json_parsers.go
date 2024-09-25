@@ -2,60 +2,42 @@ package parsers
 
 import (
 	"encoding/json"
-	"fmt"
-	"strconv"
+	"math/bits"
 )
 
-func ParseIperfThrouputTCPTest(output string) string {
-	var iperfThroughput struct {
-		End struct {
-			Streams []struct {
-				Sender struct {
-					BitsPerSecond     float64 `json:"bits_per_second"`
-					MeanRoundTripTime int     `json:"mean_rtt"`
-					MinRoundTripTime  int     `json:"min_rtt"`
-					MaxRoundTripTime  int     `json:"max_rtt"`
-					Retransmits       int     `json:"retransmits"`
-				} `json:"sender"`
-			} `json:"streams"`
-			CPUUtilizationPercent struct {
-				HostTotal   float64 `json:"host_total"`
-				RemoteTotal float64 `json:"remote_total"`
-			} `json:"cpu_utilization_percent"`
-		} `json:"end"`
-	}
+func ParseIperfTcpResults(output string) string {
+	var iperfOutput IperfTcpCommandOutput
 
-	fmt.Println("Parsing iperf output\n", output)
-	fmt.Println("End of iperf output")
-
-	err := json.Unmarshal([]byte(output), &iperfThroughput)
+	err := json.Unmarshal([]byte(output), &iperfOutput)
 	if err != nil {
 		return "{\"error\": \"Failed to parse JSON output\", \"message\": \"" + err.Error() + "\"}"
 	}
 
-	if len(iperfThroughput.End.Streams) != 1 {
-		return "{\"error\": \"Failed to parse JSON output\", \"message\": \"Expected 1 stream, got " + strconv.Itoa(len(iperfThroughput.End.Streams)) + "\"}"
+	// Calculate the min, max and mean rtts by aggregating the streams
+	var sumMeanRtt uint
+	var minRtt uint = 1<<bits.UintSize - 1
+	var maxRtt uint
+
+	for _, stream := range iperfOutput.End.Streams {
+		sumMeanRtt += stream.Sender.MeanRtt
+		minRtt = min(minRtt, stream.Sender.MinRtt)
+		maxRtt = max(maxRtt, stream.Sender.MaxRtt)
 	}
 
-	var outputResult struct {
-		TotalThroughput   float64 `json:"total_throughput"`
-		MeanRoundTripTime int     `json:"mean_rtt"`
-		MinRoundTripTime  int     `json:"min_rtt"`
-		MaxRoundTripTime  int     `json:"max_rtt"`
-		Retransmits       int     `json:"retransmits"`
-		CPUUtilization    struct {
-			Host   float64 `json:"host"`
-			Remote float64 `json:"remote"`
-		} `json:"cpu_utilization"`
+	var outputResult IperfTcpParsedResult
+	outputResult.TestInfo = IperfTestInfo{
+		Protocol: iperfOutput.Start.TestStart.Protocol,
+		Streams:  iperfOutput.Start.TestStart.NumStreams,
+		BlkSize:  iperfOutput.Start.TestStart.BlkSize,
+		Duration: iperfOutput.Start.TestStart.Duration,
 	}
-
-	outputResult.TotalThroughput = iperfThroughput.End.Streams[0].Sender.BitsPerSecond / 1e6
-	outputResult.MeanRoundTripTime = iperfThroughput.End.Streams[0].Sender.MeanRoundTripTime
-	outputResult.MinRoundTripTime = iperfThroughput.End.Streams[0].Sender.MinRoundTripTime
-	outputResult.MaxRoundTripTime = iperfThroughput.End.Streams[0].Sender.MaxRoundTripTime
-	outputResult.Retransmits = iperfThroughput.End.Streams[0].Sender.Retransmits
-	outputResult.CPUUtilization.Host = iperfThroughput.End.CPUUtilizationPercent.HostTotal
-	outputResult.CPUUtilization.Remote = iperfThroughput.End.CPUUtilizationPercent.RemoteTotal
+	outputResult.Mss = iperfOutput.Start.TcpMss
+	outputResult.TotalThroughput = iperfOutput.End.SumSent.BitsPerSecond / 1e6
+	outputResult.MeanRoundTripTime = float64(sumMeanRtt) / float64(len(iperfOutput.End.Streams))
+	outputResult.MinRoundTripTime = minRtt
+	outputResult.MaxRoundTripTime = maxRtt
+	outputResult.Retransmits = iperfOutput.End.SumSent.Retransmits
+	outputResult.CPUUtilization = iperfOutput.End.CPUUtilizationPercent
 
 	parsedJson, err := json.Marshal(outputResult)
 	if err != nil {
@@ -65,48 +47,34 @@ func ParseIperfThrouputTCPTest(output string) string {
 	return string(parsedJson)
 }
 
-func ParseIperfThrouputUDPTest(output string) string {
-	fmt.Println("Parsing iperf output\n", output)
-	var iperfThroughput struct {
-		End struct {
-			Sum struct {
-				BitsPerSecond float64 `json:"bits_per_second"`
-				Jitter        float64 `json:"jitter_ms"`
-				LostPackets   int     `json:"lost_packets"`
-				TotalPackets  int     `json:"packets"`
-				LostPercent   float64 `json:"lost_percent"`
-			} `json:"sum"`
-			CPUUtilizationPercent struct {
-				HostTotal   float64 `json:"host_total"`
-				RemoteTotal float64 `json:"remote_total"`
-			} `json:"cpu_utilization_percent"`
-		} `json:"end"`
-	}
+func ParseIperfUdpResults(output string) string {
+	var iperfOutput IperfUdpCommandOutput
 
-	err := json.Unmarshal([]byte(output), &iperfThroughput)
+	err := json.Unmarshal([]byte(output), &iperfOutput)
 	if err != nil {
 		return "{\"error\": \"Failed to parse JSON output\", \"message\": \"" + err.Error() + "\"}"
 	}
 
-	var outputResult struct {
-		TotalThroughput float64 `json:"total_throughput"`
-		Jitter          float64 `json:"jitter_ms"`
-		LostPackets     int     `json:"lost_packets"`
-		TotalPackets    int     `json:"total_packets"`
-		LostPercent     float64 `json:"lost_percent"`
-		CPUUtilization  struct {
-			Host   float64 `json:"host"`
-			Remote float64 `json:"remote"`
-		} `json:"cpu_utilization"`
+	// Calculate the total out of order packets
+	var totalOutOfOrderPackets int
+	for _, stream := range iperfOutput.End.Streams {
+		totalOutOfOrderPackets += stream.Udp.OutOfOrderPackets
 	}
 
-	outputResult.TotalThroughput = iperfThroughput.End.Sum.BitsPerSecond / 1e6
-	outputResult.Jitter = iperfThroughput.End.Sum.Jitter
-	outputResult.LostPackets = iperfThroughput.End.Sum.LostPackets
-	outputResult.TotalPackets = iperfThroughput.End.Sum.TotalPackets
-	outputResult.LostPercent = iperfThroughput.End.Sum.LostPercent
-	outputResult.CPUUtilization.Host = iperfThroughput.End.CPUUtilizationPercent.HostTotal
-	outputResult.CPUUtilization.Remote = iperfThroughput.End.CPUUtilizationPercent.RemoteTotal
+	var outputResult IperfUdpParsedResult
+	outputResult.TestInfo = IperfTestInfo{
+		Protocol: iperfOutput.Start.TestStart.Protocol,
+		Streams:  iperfOutput.Start.TestStart.NumStreams,
+		BlkSize:  iperfOutput.Start.TestStart.BlkSize,
+		Duration: iperfOutput.Start.TestStart.Duration,
+	}
+	outputResult.TotalThroughput = iperfOutput.End.Sum.BitsPerSecond / 1e6
+	outputResult.Jitter = iperfOutput.End.Sum.Jitter
+	outputResult.LostPackets = iperfOutput.End.Sum.LostPackets
+	outputResult.TotalPackets = iperfOutput.End.Sum.Packets
+	outputResult.LostPercent = iperfOutput.End.Sum.LostPercent
+	outputResult.TotalOutOfOrderPackets = totalOutOfOrderPackets
+	outputResult.CPUUtilization = iperfOutput.End.CPUUtilizationPercent
 
 	parsedJson, err := json.Marshal(outputResult)
 	if err != nil {
