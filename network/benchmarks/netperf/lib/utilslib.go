@@ -204,10 +204,14 @@ func createRCs(c *kubernetes.Clientset, testParams TestParams, primaryNode, seco
 						NodeName: kubeNode,
 						Containers: []api.Container{
 							{
-								Name:            name,
-								Image:           testParams.Image,
-								Ports:           portSpec,
-								Args:            []string{"--mode=worker"},
+								Name:  name,
+								Image: testParams.Image,
+								Ports: portSpec,
+								Args: []string{
+									"--mode=worker",
+									fmt.Sprintf("--testFrom=%d", testParams.TestFrom),
+									fmt.Sprintf("--testTo=%d", testParams.TestTo),
+								},
 								Env:             workerEnv,
 								ImagePullPolicy: "Always",
 							},

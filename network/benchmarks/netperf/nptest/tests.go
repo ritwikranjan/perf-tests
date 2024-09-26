@@ -26,7 +26,7 @@ type TestCase struct {
 	Finished        bool
 	BandwidthParser func(string) (float64, int)
 	JsonParser      func(string) string
-	TestRunner      func(ClientWorkItem) string
+	TestRunner      func(ClientWorkItem, TestParams) string
 	// Deprecated: We will use declarative approach to define test cases
 	Type TestType
 }
@@ -256,27 +256,27 @@ var testcases = []*TestCase{
 	},
 }
 
-func iperfBasicTcpTestRunner(w ClientWorkItem) string {
-	output, _ := cmdExec(iperf3Path, []string{iperf3Path, "-c", w.Host, "-V", "-N", "-i", "30", "-t", "10", "-f", "m", "-w", "512M", "-Z", "-J", "-P", parallelStreams, "-M", strconv.Itoa(w.MSS)}, 15)
+func iperfBasicTcpTestRunner(w ClientWorkItem, t TestParams) string {
+	output, _ := cmdExec(iperf3Path, []string{iperf3Path, "-c", w.Host, "-V", "-N", "-i", "30", "-t", "10", "-f", "m", "-w", "512M", "-Z", "-J", "-P", parallelStreams, "-M", strconv.Itoa(t.MSS)}, 15)
 	return output
 }
 
-func iperfBasicUdpTestRunner(w ClientWorkItem) string {
+func iperfBasicUdpTestRunner(w ClientWorkItem, t TestParams) string {
 	output, _ := cmdExec(iperf3Path, []string{iperf3Path, "-c", w.Host, "-i", "30", "-t", "10", "-f", "m", "-b", "0", "-u", "-J"}, 15)
 	return output
 }
 
-func netperfTestRunner(w ClientWorkItem) string {
+func netperfTestRunner(w ClientWorkItem, t TestParams) string {
 	output, _ := cmdExec(netperfPath, []string{netperfPath, "-H", w.Host}, 15)
 	return output
 }
 
-func iperfThroughputTcpRunner(w ClientWorkItem) string {
-	output, _ := cmdExec(iperf3Path, []string{iperf3Path, "-c", w.Host, "-V", "-J", "--time", fmt.Sprintf("%f", w.TestDuration.Seconds()), "--bandwidth", w.Bandwidth, "-P", "1", "-w", "410K"}, 15)
+func iperfThroughputTcpRunner(w ClientWorkItem, t TestParams) string {
+	output, _ := cmdExec(iperf3Path, []string{iperf3Path, "-c", w.Host, "-V", "-J", "--time", fmt.Sprintf("%f", t.TestDuration.Seconds()), "--bandwidth", t.Bandwidth, "-w", "410K", "-P", "1"}, 15)
 	return output
 }
 
-func iperfThroughputUdpRunner(w ClientWorkItem) string {
-	output, _ := cmdExec(iperf3Path, []string{iperf3Path, "-c", w.Host, "-V", "-J", "--time", fmt.Sprintf("%f", w.TestDuration.Seconds()), "--bandwidth", w.Bandwidth, "-P", "1", "-w", "410K", "-u"}, 15)
+func iperfThroughputUdpRunner(w ClientWorkItem, t TestParams) string {
+	output, _ := cmdExec(iperf3Path, []string{iperf3Path, "-c", w.Host, "-V", "-J", "--time", fmt.Sprintf("%f", t.TestDuration.Seconds()), "--bandwidth", t.Bandwidth, "-w", "410K", "-P", "1", "-u"}, 15)
 	return output
 }

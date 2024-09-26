@@ -59,6 +59,7 @@ var workerStateMap map[string]*workerState
 var dataPoints map[string][]point
 var dataPointKeys []string
 var datapointsFlushed bool
+var active_tests []*TestCase
 
 type Result struct {
 	Label  string          `json:"label"`
@@ -97,6 +98,9 @@ const (
 	localhostIPv4Address = "127.0.0.1"
 )
 
+// NetPerfRPC service that exposes RegisterClient and ReceiveOutput for clients
+type NetPerfRPC int
+
 // ClientRegistrationData stores a data about a single client
 type ClientRegistrationData struct {
 	Host     string
@@ -107,10 +111,8 @@ type ClientRegistrationData struct {
 
 // IperfClientWorkItem represents a single task for an Iperf client
 type ClientWorkItem struct {
-	Host     string
-	Port     string
-	TestCase int
-	TestParams
+	Host string
+	Port string
 }
 
 // IperfServerWorkItem represents a single task for an Iperf server
@@ -121,11 +123,12 @@ type ServerWorkItem struct {
 
 // WorkItem represents a single task for a worker
 type WorkItem struct {
-	IsClientItem bool
-	IsServerItem bool
-	IsIdle       bool
-	ClientWorkItem
-	ServerWorkItem
+	IsClientItem  bool
+	IsServerItem  bool
+	IsIdle        bool
+	TestCaseIndex int
+	ClientItem    ClientWorkItem
+	ServerItem    ServerWorkItem
 }
 
 type workerState struct {
@@ -137,26 +140,21 @@ type workerState struct {
 
 // WorkerOutput stores the results from a single worker
 type WorkerOutput struct {
-	TestCase int
-	Output   string
-	Code     int
-	Worker   string
-	Type     TestType
+	TestCaseIndex int
+	Output        string
+	Code          int
+	Worker        string
+	Type          TestType
 }
-
-var currentJobIndex int
 
 func init() {
 	flag.StringVar(&mode, "mode", "worker", "Mode for the daemon (worker | orchestrator)")
 	flag.StringVar(&port, "port", rpcServicePort, "Port to listen on (defaults to 5202)")
-	flag.StringVar(&host, "host", "", "IP address to bind to (defaults to 0.0.0.0)")
 	flag.IntVar(&testFrom, "testFrom", 0, "start from test number testFrom")
 	flag.IntVar(&testTo, "testTo", 5, "end at test number testTo")
 
 	workerStateMap = make(map[string]*workerState)
 	results = make([]Result, 0)
-
-	currentJobIndex = 0
 
 	dataPoints = make(map[string][]point)
 }
@@ -176,10 +174,10 @@ func main() {
 	if !validateParams() {
 		fmt.Println("Failed to parse cmdline args - fatal error - bailing out")
 		os.Exit(1)
-
 	}
 	grabEnv()
-	testcases = testcases[testFrom:testTo]
+	active_tests = make([]*TestCase, 0, testTo-testFrom)
+	active_tests = append(active_tests, testcases[testFrom:testTo]...)
 	fmt.Println("Running as", mode, "...")
 	if mode == orchestratorMode {
 		orchestrate()
@@ -339,10 +337,10 @@ func getMyIP() string {
 }
 
 func handleClientWorkItem(client *rpc.Client, workItem *WorkItem) {
-	testCase := testcases[workItem.TestCase]
-	outputString := testCase.TestRunner(workItem.ClientWorkItem)
+	testCase := active_tests[workItem.TestCaseIndex]
+	outputString := testCase.TestRunner(workItem.ClientItem, testCase.TestParams)
 	var reply int
-	err := client.Call("NetPerfRPC.ReceiveOutput", WorkerOutput{Output: outputString, Worker: worker, Type: testCase.Type, TestCase: workItem.TestCase}, &reply)
+	err := client.Call("NetPerfRPC.ReceiveOutput", WorkerOutput{Output: outputString, Worker: worker, Type: testCase.Type}, &reply)
 	if err != nil {
 		log.Fatal("failed to call client", err)
 	}
@@ -446,4 +444,117 @@ func cmdExec(command string, args []string, _ int32) (rv string, rc bool) {
 	rv = stdoutput.String()
 	rc = true
 	return
+}
+
+func (t *NetPerfRPC) ReceiveOutput(data *WorkerOutput, _ *int) error {
+	globalLock.Lock()
+	defer globalLock.Unlock()
+
+	fmt.Println("ReceiveOutput WorkItem TestCaseIndex: ", data.TestCaseIndex)
+	testcase := active_tests[data.TestCaseIndex]
+
+	outputLog := fmt.Sprintln("Received output from worker", data.Worker, "for test", testcase.Label,
+		"from", testcase.SourceNode, "to", testcase.DestinationNode) + data.Output
+	writeOutputFile(outputCaptureFile, outputLog)
+
+	if testcase.BandwidthParser != nil {
+		bw, mss := testcase.BandwidthParser(data.Output)
+		registerDataPoint(testcase.Label, mss, fmt.Sprintf("%f", bw), data.TestCaseIndex)
+		fmt.Println("Jobdone from worker", data.Worker, "Bandwidth was", bw, "Mbits/sec")
+	}
+
+	if testcase.JsonParser != nil {
+		addResult(
+			fmt.Sprintf("%s with MSS: %d", testcase.Label, testcase.MSS),
+			testcase.JsonParser(data.Output),
+		)
+		fmt.Println("Jobdone from worker", data.Worker, "JSON output generated")
+	}
+
+	return nil
+}
+
+func (t *NetPerfRPC) RegisterClient(data ClientRegistrationData, workItem *WorkItem) error {
+	globalLock.Lock()
+	defer globalLock.Unlock()
+
+	state, ok := workerStateMap[data.Worker]
+
+	if !ok {
+		// For new clients, trigger an iperf server start immediately
+		state = &workerState{sentServerItem: true, idle: true, IP: data.IP, worker: data.Worker}
+		workerStateMap[data.Worker] = state
+		workItem.IsServerItem = true
+		workItem.ServerItem.ListenPort = "5201"
+		workItem.ServerItem.Timeout = 3600
+		return nil
+	}
+
+	// Worker defaults to idle unless the allocateWork routine below assigns an item
+	state.idle = true
+
+	// Give the worker a new work item or let it idle loop another 5 seconds
+	allocateWorkToClient(state, workItem)
+	return nil
+}
+
+func allocateWorkToClient(workerState *workerState, workItem *WorkItem) {
+	if !allWorkersIdle() {
+		workItem.IsIdle = true
+		return
+	}
+
+	// System is all idle - pick up next work item to allocate to client
+	for n, v := range active_tests {
+		if v.Finished {
+			continue
+		}
+		if v.SourceNode != workerState.worker {
+			workItem.IsIdle = true
+			return
+		}
+		if _, ok := workerStateMap[v.DestinationNode]; !ok {
+			workItem.IsIdle = true
+			return
+		}
+		fmt.Printf("Requesting jobrun '%s' from %s to %s for MSS %d for MsgSize %d\n", v.Label, v.SourceNode, v.DestinationNode, v.MSS, v.MsgSize)
+		workItem.IsClientItem = true
+		workItem.TestCaseIndex = n
+		workerState.idle = false
+
+		if !v.ClusterIP {
+			workItem.ClientItem.Host = workerStateMap[workerState.worker].IP
+		} else {
+			workItem.ClientItem.Host = os.Getenv("NETPERF_W2_SERVICE_HOST")
+		}
+
+		if v.MSS != 0 && v.MSS < mssMax {
+			v.MSS += mssStepSize
+		} else {
+			v.Finished = true
+		}
+
+		if v.Type == netperfTest {
+			workItem.ClientItem.Port = "12865"
+		} else {
+			workItem.ClientItem.Port = "5201"
+		}
+
+		return
+	}
+
+	for _, v := range active_tests {
+		if !v.Finished {
+			return
+		}
+	}
+
+	if !datapointsFlushed {
+		fmt.Println("ALL TESTCASES AND MSS RANGES COMPLETE - GENERATING CSV OUTPUT")
+		flushDataPointsToCsv()
+		flushResultJsonData()
+		datapointsFlushed = true
+	}
+
+	workItem.IsIdle = true
 }
