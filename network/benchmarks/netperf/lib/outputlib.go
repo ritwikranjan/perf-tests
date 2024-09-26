@@ -12,12 +12,21 @@ import (
 )
 
 func getLogsFromPod(c *kubernetes.Clientset, podName, testNamespace string) (*string, error) {
-	body, err := c.CoreV1().Pods(testNamespace).GetLogs(podName, &api.PodLogOptions{Timestamps: false}).DoRaw(context.Background())
-	if err != nil {
-		return nil, fmt.Errorf("error (%s) reading logs from pod %s", err, podName)
+	var logData *string
+	backoff := 10 * time.Second
+
+	for i := 0; i < 3; i++ {
+		body, err := c.CoreV1().Pods(testNamespace).GetLogs(podName, &api.PodLogOptions{}).DoRaw(context.Background())
+		if err == nil {
+			data := string(body)
+			logData = &data
+			return logData, nil
+		}
+		time.Sleep(backoff)
+		backoff *= 2
 	}
-	logData := string(body)
-	return &logData, nil
+
+	return nil, fmt.Errorf("error reading logs from pod %s after 3 retries", podName)
 }
 
 func getDataFromPod(c *kubernetes.Clientset, podName, startMarker, endMarker, testNamespace string) (*string, error) {
