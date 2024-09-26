@@ -112,7 +112,7 @@ type IperfTestInfo struct {
 
 type IperfTcpParsedResult struct {
 	TestInfo          IperfTestInfo              `json:"test_info"`
-	Mss               int                        `json:"mss",omitempty`
+	Mss               int                        `json:"mss,omitempty"`
 	TotalThroughput   float64                    `json:"total_throughput"`
 	MeanRoundTripTime float64                    `json:"mean_rtt"`
 	MinRoundTripTime  uint                       `json:"min_rtt"`

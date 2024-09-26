@@ -7,7 +7,7 @@ import (
 const (
 	csvDataMarker     = "GENERATING CSV OUTPUT"
 	csvEndDataMarker  = "END CSV DATA"
-	jsonDataMarker    = "GENRATING JSON OUTPUT"
+	jsonDataMarker    = "GENERATING JSON OUTPUT"
 	jsonEndDataMarker = "END JSON OUTPUT"
 	runUUID           = "latest"
 	orchestratorPort  = 5202

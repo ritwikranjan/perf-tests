@@ -1,6 +1,10 @@
 package main
 
 import (
+	"fmt"
+	"strconv"
+	"time"
+
 	"k8s.io/perf-tests/network/nptest/parsers"
 )
 
@@ -16,12 +20,13 @@ const (
 	iperfThroughputUDPTest
 )
 
-type testcase struct {
+type TestCase struct {
 	TestParams
 	Label           string
 	Finished        bool
 	BandwidthParser func(string) (float64, int)
 	JsonParser      func(string) string
+	TestRunner      func(ClientWorkItem) string
 	// Deprecated: We will use declarative approach to define test cases
 	Type TestType
 }
@@ -32,220 +37,118 @@ type TestParams struct {
 	ClusterIP       bool
 	MSS             int
 	MsgSize         int
+	TestDuration    time.Duration
+	// Fixed bandwidth for the test
+	Bandwidth string
 }
 
-var testcases = []*testcase{
-	// {
-	// 	Label: "1 qperf TCP. Same VM using Pod IP",
-	// 	TestParams: TestParams{
-	// 		SourceNode:      "netperf-w1",
-	// 		DestinationNode: "netperf-w2",
-	// 		ClusterIP:       false,
-	// 		MSS:             mssMin,
-	// 	},
-	// 	BandwidthParser: parsers.ParseIperfTCPBandwidth,
-	// 	Type:            qperfTCPTest,
-	// },
-	// {
-	// 	Label: "2 qperf TCP. Same VM using Virtual IP",
-	// 	TestParams: TestParams{
-	// 		SourceNode:      "netperf-w1",
-	// 		DestinationNode: "netperf-w2",
-	// 		ClusterIP:       true,
-	// 		MSS:             mssMin,
-	// 	},
-	// 	BandwidthParser: parsers.ParseIperfTCPBandwidth,
-	// 	Type:            qperfTCPTest,
-	// },
-	// {
-	// 	Label: "3 qperf TCP. Remote VM using Pod IP",
-	// 	TestParams: TestParams{
-	// 		SourceNode:      "netperf-w1",
-	// 		DestinationNode: "netperf-w3",
-	// 		ClusterIP:       false,
-	// 		MSS:             mssMin,
-	// 	},
-	// 	BandwidthParser: parsers.ParseIperfTCPBandwidth,
-	// 	Type:            qperfTCPTest,
-	// },
-	// {
-	// 	Label: "4 qperf TCP. Remote VM using Virtual IP",
-	// 	TestParams: TestParams{
-	// 		SourceNode:      "netperf-w3",
-	// 		DestinationNode: "netperf-w2",
-	// 		ClusterIP:       true,
-	// 		MSS:             mssMin,
-	// 	},
-	// 	BandwidthParser: parsers.ParseIperfTCPBandwidth,
-	// 	Type:            qperfTCPTest,
-	// },
-	// {
-	// 	Label: "5 qperf TCP. Hairpin Pod to own Virtual IP",
-	// 	TestParams: TestParams{
-	// 		SourceNode:      "netperf-w2",
-	// 		DestinationNode: "netperf-w2",
-	// 		ClusterIP:       true,
-	// 		MSS:             mssMin,
-	// 	},
-	// 	BandwidthParser: parsers.ParseIperfTCPBandwidth,
-	// 	Type:            qperfTCPTest,
-	// },
-
+var testcases = []*TestCase{
 	{
-		Label: "6 iperf TCP. Same VM using Pod IP",
+		Label: "0 iperf TCP. Same VM using Pod IP",
 		TestParams: TestParams{
 			SourceNode:      "netperf-w1",
 			DestinationNode: "netperf-w2",
 			ClusterIP:       false,
 			MSS:             mssMin,
 		},
+		TestRunner:      iperfBasicTcpTestRunner,
 		JsonParser:      parsers.ParseIperfTcpResults,
 		BandwidthParser: parsers.ParseIperfTCPBandwidth,
 		Type:            iperfTCPTest,
 	},
 	{
-		Label: "7 iperf TCP. Same VM using Virtual IP",
+		Label: "1 iperf TCP. Same VM using Virtual IP",
 		TestParams: TestParams{
 			SourceNode:      "netperf-w1",
 			DestinationNode: "netperf-w2",
 			ClusterIP:       true,
 			MSS:             mssMin,
 		},
+		TestRunner:      iperfBasicTcpTestRunner,
 		JsonParser:      parsers.ParseIperfTcpResults,
 		BandwidthParser: parsers.ParseIperfTCPBandwidth,
 		Type:            iperfTCPTest,
 	},
 	{
-		Label: "8 iperf TCP. Remote VM using Pod IP",
+		Label: "2 iperf TCP. Remote VM using Pod IP",
 		TestParams: TestParams{
 			SourceNode:      "netperf-w1",
 			DestinationNode: "netperf-w3",
 			ClusterIP:       false,
 			MSS:             mssMin,
 		},
+		TestRunner:      iperfBasicTcpTestRunner,
 		JsonParser:      parsers.ParseIperfTcpResults,
 		BandwidthParser: parsers.ParseIperfTCPBandwidth,
 		Type:            iperfTCPTest,
 	},
 	{
-		Label: "9 iperf TCP. Remote VM using Virtual IP",
+		Label: "3 iperf TCP. Remote VM using Virtual IP",
 		TestParams: TestParams{
 			SourceNode:      "netperf-w3",
 			DestinationNode: "netperf-w2",
 			ClusterIP:       true,
 			MSS:             mssMin,
 		},
+		TestRunner:      iperfBasicTcpTestRunner,
 		JsonParser:      parsers.ParseIperfTcpResults,
 		BandwidthParser: parsers.ParseIperfTCPBandwidth,
 		Type:            iperfTCPTest,
 	},
 	{
-		Label: "10 iperf TCP. Hairpin Pod to own Virtual IP",
+		Label: "4 iperf TCP. Hairpin Pod to own Virtual IP",
 		TestParams: TestParams{
 			SourceNode:      "netperf-w2",
 			DestinationNode: "netperf-w2",
 			ClusterIP:       true,
 			MSS:             mssMin,
 		},
+		TestRunner:      iperfBasicTcpTestRunner,
 		JsonParser:      parsers.ParseIperfTcpResults,
 		BandwidthParser: parsers.ParseIperfTCPBandwidth,
 		Type:            iperfTCPTest,
 	},
-
-	// {
-	// 	Label: "11 iperf SCTP. Same VM using Pod IP",
-	// 	TestParams: TestParams{
-	// 		SourceNode:      "netperf-w1",
-	// 		DestinationNode: "netperf-w2",
-	// 		ClusterIP:       false,
-	// 		MSS:             mssMin,
-	// 	},
-	// 	BandwidthParser: parsers.ParseIperfTCPBandwidth,
-	// 	Type:            iperfSctpTest,
-	// },
-	// {
-	// 	Label: "12 iperf SCTP. Same VM using Virtual IP",
-	// 	TestParams: TestParams{
-	// 		SourceNode:      "netperf-w1",
-	// 		DestinationNode: "netperf-w2",
-	// 		ClusterIP:       true,
-	// 		MSS:             mssMin,
-	// 	},
-	// 	BandwidthParser: parsers.ParseIperfTCPBandwidth,
-	// 	Type:            iperfSctpTest,
-	// },
-	// {
-	// 	Label: "13 iperf SCTP. Remote VM using Pod IP",
-	// 	TestParams: TestParams{
-	// 		SourceNode:      "netperf-w1",
-	// 		DestinationNode: "netperf-w3",
-	// 		ClusterIP:       false,
-	// 		MSS:             mssMin,
-	// 	},
-	// 	BandwidthParser: parsers.ParseIperfTCPBandwidth,
-	// 	Type:            iperfSctpTest,
-	// },
-	// {
-	// 	Label: "14 iperf SCTP. Remote VM using Virtual IP",
-	// 	TestParams: TestParams{
-	// 		SourceNode:      "netperf-w3",
-	// 		DestinationNode: "netperf-w2",
-	// 		ClusterIP:       true,
-	// 		MSS:             mssMin,
-	// 	},
-	// 	BandwidthParser: parsers.ParseIperfTCPBandwidth,
-	// 	Type:            iperfSctpTest,
-	// },
-	// {
-	// 	Label: "15 iperf SCTP. Hairpin Pod to own Virtual IP",
-	// 	TestParams: TestParams{
-	// 		SourceNode:      "netperf-w2",
-	// 		DestinationNode: "netperf-w2",
-	// 		ClusterIP:       true,
-	// 		MSS:             mssMin,
-	// 	},
-	// 	BandwidthParser: parsers.ParseIperfTCPBandwidth,
-	// 	Type:            iperfSctpTest,
-	// },
-
 	{
-		Label: "16 iperf UDP. Same VM using Virtual IP",
+		Label: "5 iperf UDP. Same VM using Virtual IP",
 		TestParams: TestParams{
 			SourceNode:      "netperf-w1",
 			DestinationNode: "netperf-w2",
 			ClusterIP:       true,
 			MSS:             mssMax,
 		},
+		TestRunner:      iperfBasicUdpTestRunner,
 		JsonParser:      parsers.ParseIperfUdpResults,
 		BandwidthParser: parsers.ParseIperfUDPBandwidth,
 		Type:            iperfUDPTest,
 	},
 	{
-		Label: "17 iperf UDP. Remote VM using Pod IP",
+		Label: "6 iperf UDP. Remote VM using Pod IP",
 		TestParams: TestParams{
 			SourceNode:      "netperf-w1",
 			DestinationNode: "netperf-w3",
 			ClusterIP:       false,
 			MSS:             mssMax,
 		},
+		TestRunner:      iperfBasicUdpTestRunner,
 		JsonParser:      parsers.ParseIperfUdpResults,
 		BandwidthParser: parsers.ParseIperfUDPBandwidth,
 		Type:            iperfUDPTest,
 	},
 	{
-		Label: "18 iperf UDP. Remote VM using Virtual IP",
+		Label: "7 iperf UDP. Remote VM using Virtual IP",
 		TestParams: TestParams{
 			SourceNode:      "netperf-w3",
 			DestinationNode: "netperf-w2",
 			ClusterIP:       true,
 			MSS:             mssMax,
 		},
+		TestRunner:      iperfBasicUdpTestRunner,
 		BandwidthParser: parsers.ParseIperfUDPBandwidth,
 		JsonParser:      parsers.ParseIperfUdpResults,
 		Type:            iperfUDPTest,
 	},
 	{
-		Label: "19 netperf. Same VM using Pod IP",
+		Label: "8 netperf. Same VM using Pod IP",
 		TestParams: TestParams{
 			SourceNode:      "netperf-w1",
 			DestinationNode: "netperf-w2",
@@ -255,86 +158,125 @@ var testcases = []*testcase{
 		BandwidthParser: parsers.ParseNetperfBandwidth,
 		Type:            netperfTest,
 	},
-
 	{
-		Label: "20 netperf. Same VM using Pod IP",
+		Label: "9 netperf. Same VM using Pod IP",
 		TestParams: TestParams{
 			SourceNode:      "netperf-w1",
 			DestinationNode: "netperf-w2",
 			ClusterIP:       false,
 		},
+		TestRunner:      netperfTestRunner,
 		BandwidthParser: parsers.ParseNetperfBandwidth,
 		Type:            netperfTest,
 	},
 	{
-		Label: "21 netperf. Same VM using Virtual IP",
+		Label: "10 netperf. Same VM using Virtual IP",
 		TestParams: TestParams{
 			SourceNode:      "netperf-w1",
 			DestinationNode: "netperf-w2",
 			ClusterIP:       true,
 		},
+		TestRunner:      netperfTestRunner,
 		BandwidthParser: parsers.ParseNetperfBandwidth,
 		Type:            netperfTest,
 	},
 	{
-		Label: "22 netperf. Remote VM using Pod IP",
+		Label: "11 netperf. Remote VM using Pod IP",
 		TestParams: TestParams{
 			SourceNode:      "netperf-w1",
 			DestinationNode: "netperf-w3",
 			ClusterIP:       false,
 		},
+		TestRunner:      netperfTestRunner,
 		BandwidthParser: parsers.ParseNetperfBandwidth,
 		Type:            netperfTest,
 	},
 	{
-		Label: "23 netperf. Remote VM using Virtual IP",
+		Label: "12 netperf. Remote VM using Virtual IP",
 		TestParams: TestParams{
 			SourceNode:      "netperf-w3",
 			DestinationNode: "netperf-w2",
 			ClusterIP:       true,
 		},
+		TestRunner:      netperfTestRunner,
 		BandwidthParser: parsers.ParseNetperfBandwidth,
 		Type:            netperfTest,
 	},
+	{
+		Label: "13 iperf Throughput TCP. Same VM using Pod IP",
+		TestParams: TestParams{
+			SourceNode:      "netperf-w1",
+			DestinationNode: "netperf-w2",
+			ClusterIP:       false,
+			TestDuration:    10 * time.Minute,
+			Bandwidth:       "1G",
+		},
+		TestRunner: iperfThroughputTcpRunner,
+		JsonParser: parsers.ParseIperfTcpResults,
+		Type:       iperfThroughputTest,
+	},
+	{
+		Label: "14 iperf Throughput TCP. Remote VM using Pod IP",
+		TestParams: TestParams{
+			SourceNode:      "netperf-w1",
+			DestinationNode: "netperf-w3",
+			ClusterIP:       false,
+			TestDuration:    10 * time.Minute,
+			Bandwidth:       "1G",
+		},
+		TestRunner: iperfThroughputTcpRunner,
+		JsonParser: parsers.ParseIperfTcpResults,
+		Type:       iperfThroughputTest,
+	},
+	{
+		Label: "15 iperf Throughput UDP. Remote VM using Pod IP",
+		TestParams: TestParams{
+			SourceNode:      "netperf-w1",
+			DestinationNode: "netperf-w3",
+			ClusterIP:       false,
+			TestDuration:    10 * time.Minute,
+			Bandwidth:       "1G",
+		},
+		TestRunner: iperfThroughputUdpRunner,
+		JsonParser: parsers.ParseIperfTcpResults,
+		Type:       iperfThroughputUDPTest,
+	},
+	{
+		Label: "16 iperf Throughput UDP. Same VM using Pod IP",
+		TestParams: TestParams{
+			SourceNode:      "netperf-w1",
+			DestinationNode: "netperf-w2",
+			ClusterIP:       false,
+			TestDuration:    10 * time.Minute,
+			Bandwidth:       "1G",
+		},
+		TestRunner: iperfThroughputUdpRunner,
+		JsonParser: parsers.ParseIperfTcpResults,
+		Type:       iperfThroughputUDPTest,
+	},
+}
 
-	{
-		Label: "24 iperf Throughput TCP. Same VM using Pod IP",
-		TestParams: TestParams{
-			SourceNode:      "netperf-w1",
-			DestinationNode: "netperf-w2",
-			ClusterIP:       false,
-		},
-		JsonParser: parsers.ParseIperfTcpResults,
-		Type:       iperfThroughputTest,
-	},
-	{
-		Label: "25 iperf Throughput TCP. Remote VM using Pod IP",
-		TestParams: TestParams{
-			SourceNode:      "netperf-w1",
-			DestinationNode: "netperf-w3",
-			ClusterIP:       false,
-		},
-		JsonParser: parsers.ParseIperfTcpResults,
-		Type:       iperfThroughputTest,
-	},
-	{
-		Label: "26 iperf Throughput UDP. Remote VM using Pod IP",
-		TestParams: TestParams{
-			SourceNode:      "netperf-w1",
-			DestinationNode: "netperf-w3",
-			ClusterIP:       false,
-		},
-		JsonParser: parsers.ParseIperfTcpResults,
-		Type:       iperfThroughputUDPTest,
-	},
-	{
-		Label: "27 iperf Throughput UDP. Same VM using Pod IP",
-		TestParams: TestParams{
-			SourceNode:      "netperf-w1",
-			DestinationNode: "netperf-w2",
-			ClusterIP:       false,
-		},
-		JsonParser: parsers.ParseIperfTcpResults,
-		Type:       iperfThroughputUDPTest,
-	},
+func iperfBasicTcpTestRunner(w ClientWorkItem) string {
+	output, _ := cmdExec(iperf3Path, []string{iperf3Path, "-c", w.Host, "-V", "-N", "-i", "30", "-t", "10", "-f", "m", "-w", "512M", "-Z", "-J", "-P", parallelStreams, "-M", strconv.Itoa(w.MSS)}, 15)
+	return output
+}
+
+func iperfBasicUdpTestRunner(w ClientWorkItem) string {
+	output, _ := cmdExec(iperf3Path, []string{iperf3Path, "-c", w.Host, "-i", "30", "-t", "10", "-f", "m", "-b", "0", "-u", "-J"}, 15)
+	return output
+}
+
+func netperfTestRunner(w ClientWorkItem) string {
+	output, _ := cmdExec(netperfPath, []string{netperfPath, "-H", w.Host}, 15)
+	return output
+}
+
+func iperfThroughputTcpRunner(w ClientWorkItem) string {
+	output, _ := cmdExec(iperf3Path, []string{iperf3Path, "-c", w.Host, "-V", "-J", "--time", fmt.Sprintf("%f", w.TestDuration.Seconds()), "--bandwidth", w.Bandwidth, "-P", "1", "-w", "410K"}, 15)
+	return output
+}
+
+func iperfThroughputUdpRunner(w ClientWorkItem) string {
+	output, _ := cmdExec(iperf3Path, []string{iperf3Path, "-c", w.Host, "-V", "-J", "--time", fmt.Sprintf("%f", w.TestDuration.Seconds()), "--bandwidth", w.Bandwidth, "-P", "1", "-w", "410K", "-u"}, 15)
+	return output
 }
