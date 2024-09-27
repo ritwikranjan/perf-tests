@@ -111,8 +111,9 @@ type ClientRegistrationData struct {
 
 // IperfClientWorkItem represents a single task for an Iperf client
 type ClientWorkItem struct {
-	Host string
-	Port string
+	Host   string
+	Port   string
+	Params TestParams
 }
 
 // IperfServerWorkItem represents a single task for an Iperf server
@@ -338,9 +339,9 @@ func getMyIP() string {
 
 func handleClientWorkItem(client *rpc.Client, workItem *WorkItem) {
 	testCase := active_tests[workItem.TestCaseIndex]
-	outputString := testCase.TestRunner(workItem.ClientItem, testCase.TestParams)
+	outputString := testCase.TestRunner(workItem.ClientItem)
 	var reply int
-	err := client.Call("NetPerfRPC.ReceiveOutput", WorkerOutput{Output: outputString, Worker: worker, Type: testCase.Type}, &reply)
+	err := client.Call("NetPerfRPC.ReceiveOutput", WorkerOutput{Output: outputString, Worker: worker, Type: testCase.Type, TestCaseIndex: workItem.TestCaseIndex}, &reply)
 	if err != nil {
 		log.Fatal("failed to call client", err)
 	}
@@ -465,7 +466,7 @@ func (t *NetPerfRPC) ReceiveOutput(data *WorkerOutput, _ *int) error {
 
 	if testcase.JsonParser != nil {
 		addResult(
-			fmt.Sprintf("%s with MSS: %d", testcase.Label, testcase.MSS),
+			fmt.Sprintf("%s with MSS: %d", testcase.Label, testcase.MSS-mssStepSize),
 			testcase.JsonParser(data.Output),
 		)
 		fmt.Println("Jobdone from worker", data.Worker, "JSON output generated")
@@ -527,6 +528,8 @@ func allocateWorkToClient(workerState *workerState, workItem *WorkItem) {
 		} else {
 			workItem.ClientItem.Host = os.Getenv("NETPERF_W2_SERVICE_HOST")
 		}
+
+		workItem.ClientItem.Params = v.TestParams
 
 		if v.MSS != 0 && v.MSS < mssMax {
 			v.MSS += mssStepSize

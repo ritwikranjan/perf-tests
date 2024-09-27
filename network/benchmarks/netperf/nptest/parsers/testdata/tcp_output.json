@@ -3,7 +3,8 @@
         "protocol": "TCP",
         "streams": 8,
         "blksize": 131072,
-        "duration": 10
+        "duration": 10,
+        "mss": 96
     },
     "total_throughput": 14088,
     "mean_rtt": 601,

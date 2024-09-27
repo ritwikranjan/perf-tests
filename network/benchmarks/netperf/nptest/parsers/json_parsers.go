@@ -30,8 +30,8 @@ func ParseIperfTcpResults(output string) string {
 		Streams:  iperfOutput.Start.TestStart.NumStreams,
 		BlkSize:  iperfOutput.Start.TestStart.BlkSize,
 		Duration: iperfOutput.Start.TestStart.Duration,
+		Mss:      iperfOutput.Start.TcpMss,
 	}
-	outputResult.Mss = iperfOutput.Start.TcpMss
 	outputResult.TotalThroughput = iperfOutput.End.SumSent.BitsPerSecond / 1e6
 	outputResult.MeanRoundTripTime = float64(sumMeanRtt) / float64(len(iperfOutput.End.Streams))
 	outputResult.MinRoundTripTime = minRtt
