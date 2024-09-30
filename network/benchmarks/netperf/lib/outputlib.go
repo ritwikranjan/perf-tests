@@ -9,24 +9,29 @@ import (
 
 	api "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/util/retry"
 )
 
 func getLogsFromPod(c *kubernetes.Clientset, podName, testNamespace string) (*string, error) {
 	var logData *string
-	backoff := 10 * time.Second
 
-	for i := 0; i < 3; i++ {
+	err := retry.OnError(retry.DefaultBackoff, func(err error) bool {
+		return true
+	}, func() error {
 		body, err := c.CoreV1().Pods(testNamespace).GetLogs(podName, &api.PodLogOptions{}).DoRaw(context.Background())
-		if err == nil {
-			data := string(body)
-			logData = &data
-			return logData, nil
+		if err != nil {
+			return err
 		}
-		time.Sleep(backoff)
-		backoff *= 2
+		data := string(body)
+		logData = &data
+		return nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("error reading logs from pod %s: %v", podName, err)
 	}
 
-	return nil, fmt.Errorf("error reading logs from pod %s after 3 retries", podName)
+	return logData, nil
 }
 
 func getDataFromPod(c *kubernetes.Clientset, podName, startMarker, endMarker, testNamespace string) (*string, error) {
