@@ -23,7 +23,7 @@ docker: launch
 	docker build -t $(DOCKERREPO):$(IMAGE_TAG) Dockerbuild/
 
 push: docker
-	docker push $(DOCKERREPO):latest
+	docker push $(DOCKERREPO):$(IMAGE_TAG)
 
 clean:
 	@rm -f Dockerbuild/*
