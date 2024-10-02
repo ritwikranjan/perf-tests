@@ -2,11 +2,9 @@ name: Build and Push Docker Image for network/benchmarks/netperf/nptest
 
 on:
   push:
-    branches:
-      - master
-  release:
-    types: [published, edited]
-
+    tags:
+      - '**'
+  
 jobs:
   build-and-push:
     permissions:
@@ -38,5 +36,4 @@ jobs:
         make push
       env:
         DOCKERREPO: ghcr.io/${{ github.repository_owner }}/nptest
-        # IMAGE_TAG would be commit id if push else tag if release
-        IMAGE_TAG: ${{ github.event_name == 'push' && github.sha || github.event.release.tag_name }}
+        IMAGE_TAG: ${{ github.ref_name }}
