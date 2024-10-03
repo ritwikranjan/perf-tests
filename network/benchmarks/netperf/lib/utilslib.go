@@ -242,7 +242,10 @@ func executeTests(c *kubernetes.Clientset, testParams TestParams, primaryNode, s
 		}
 		fmt.Println("Waiting for netperf pods to start up")
 
-		orchestratorPodName := getOrchestratorPodName(c, testParams.TestNamespace)
+		orchestratorPodName, err := getOrchestratorPodName(c, testParams.TestNamespace)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get orchestrator pod name: %v", err)
+		}
 		fmt.Println("Orchestrator Pod is", orchestratorPodName)
 
 		var jsonFilePath string
@@ -290,10 +293,10 @@ func executeTests(c *kubernetes.Clientset, testParams TestParams, primaryNode, s
 	return results, nil
 }
 
-func getOrchestratorPodName(c *kubernetes.Clientset, testNamespace string) string {
+func getOrchestratorPodName(c *kubernetes.Clientset, testNamespace string) (string, error) {
 	for {
 		fmt.Println("Waiting for orchestrator pod creation")
-		time.Sleep(60 * time.Second)
+		time.Sleep(5 * time.Second)
 		pods, err := c.CoreV1().Pods(testNamespace).List(context.Background(), everythingSelector)
 		if err != nil {
 			fmt.Println("Failed to fetch pods - waiting for pod creation", err)
@@ -301,7 +304,26 @@ func getOrchestratorPodName(c *kubernetes.Clientset, testNamespace string) strin
 		}
 		for _, pod := range pods.Items {
 			if strings.Contains(pod.GetName(), "netperf-orch-") {
-				return pod.GetName()
+				isPodFailed := pod.Status.Phase == api.PodFailed
+				if isPodFailed {
+					podEvent, err := c.CoreV1().Events(testNamespace).List(context.Background(), metav1.ListOptions{
+						FieldSelector: fmt.Sprintf("involvedObject.name=%s,involvedObject.kind=Pod", pod.GetName()),
+					})
+					if err != nil {
+						return "", fmt.Errorf("failed to start orchestrador pod and failed to get events for pod %s: %v", pod.GetName(), err)
+					}
+					fmt.Println("Orchestrator pod failed to start, listing pod events")
+					for _, event := range podEvent.Items {
+						fmt.Printf("Event: %s %s %s\n", event.Reason, event.Message, event.LastTimestamp)
+					}
+					return "", fmt.Errorf("orchestrator pod failed to start: %v", podEvent.Items)
+				}
+				isPodRunning := pod.Status.Phase == api.PodRunning
+				if !isPodRunning {
+					fmt.Println("Orchestrator pod is not running yet")
+					continue
+				}
+				return pod.GetName(), nil
 			}
 		}
 	}
