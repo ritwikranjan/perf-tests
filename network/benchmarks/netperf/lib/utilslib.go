@@ -3,7 +3,6 @@ package lib
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	api "k8s.io/api/core/v1"
@@ -242,7 +241,7 @@ func executeTests(c *kubernetes.Clientset, testParams TestParams, primaryNode, s
 		}
 		fmt.Println("Waiting for netperf pods to start up")
 
-		orchestratorPodName, err := getOrchestratorPodName(c, testParams.TestNamespace)
+		orchestratorPodName, err := getOrchestratorPodName(c, testParams.TestNamespace, 3*time.Minute)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get orchestrator pod name: %v", err)
 		}
@@ -293,38 +292,45 @@ func executeTests(c *kubernetes.Clientset, testParams TestParams, primaryNode, s
 	return results, nil
 }
 
-func getOrchestratorPodName(c *kubernetes.Clientset, testNamespace string) (string, error) {
+func getOrchestratorPodName(c *kubernetes.Clientset, testNamespace string, timeout time.Duration) (string, error) {
+	timeoutCh := time.After(timeout)
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
 	for {
-		fmt.Println("Waiting for orchestrator pod creation")
-		time.Sleep(5 * time.Second)
-		pods, err := c.CoreV1().Pods(testNamespace).List(context.Background(), everythingSelector)
-		if err != nil {
-			fmt.Println("Failed to fetch pods - waiting for pod creation", err)
-			continue
-		}
-		for _, pod := range pods.Items {
-			if strings.Contains(pod.GetName(), "netperf-orch-") {
-				isPodFailed := pod.Status.Phase == api.PodFailed
-				if isPodFailed {
-					podEvent, err := c.CoreV1().Events(testNamespace).List(context.Background(), metav1.ListOptions{
-						FieldSelector: fmt.Sprintf("involvedObject.name=%s,involvedObject.kind=Pod", pod.GetName()),
-					})
-					if err != nil {
-						return "", fmt.Errorf("failed to start orchestrador pod and failed to get events for pod %s: %v", pod.GetName(), err)
-					}
-					fmt.Println("Orchestrator pod failed to start, listing pod events")
-					for _, event := range podEvent.Items {
-						fmt.Printf("Event: %s %s %s\n", event.Reason, event.Message, event.LastTimestamp)
-					}
-					return "", fmt.Errorf("orchestrator pod failed to start: %v", podEvent.Items)
-				}
-				isPodRunning := pod.Status.Phase == api.PodRunning
-				if !isPodRunning {
-					fmt.Println("Orchestrator pod is not running yet")
-					continue
-				}
+		select {
+		case <-ticker.C:
+			fmt.Println("Waiting for orchestrator pod creation")
+			pods, err := c.CoreV1().Pods(testNamespace).List(context.Background(), metav1.ListOptions{
+				LabelSelector: "app=netperf-orch",
+			})
+			if err != nil {
+				fmt.Println("Failed to fetch pods - waiting for pod creation", err)
+				continue
+			}
+			if len(pods.Items) == 0 {
+				fmt.Println("No orchestrator pods found yet")
+				continue
+			}
+
+			pod := pods.Items[0]
+			podStatus := pod.Status
+
+			if podStatus.Phase == api.PodRunning {
 				return pod.GetName(), nil
 			}
+
+			for _, containerStatus := range podStatus.ContainerStatuses {
+				if waiting := containerStatus.State.Waiting; waiting != nil {
+					switch waiting.Reason {
+					case "ErrImagePull", "CrashLoopBackOff", "ImagePullBackOff":
+						return "", fmt.Errorf("orchestrator pod error: %s - %v", waiting.Reason, waiting.Message)
+					}
+				}
+			}
+			fmt.Println("Orchestrator pod is not running yet")
+		case <-timeoutCh:
+			return "", fmt.Errorf("timed out waiting for orchestrator pod to be created")
 		}
 	}
 }
